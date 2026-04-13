@@ -1,8 +1,12 @@
+from functools import lru_cache
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+
+    debug: bool = False
 
     line_channel_access_token: str
     line_channel_secret: str
@@ -15,5 +19,12 @@ class Settings(BaseSettings):
     app_base_url: str
     timezone: str = "Asia/Taipei"
 
+    # Google OAuth (for Manager Dashboard)
+    google_client_id: str
+    google_client_secret: str
+    google_allowed_domain: str = "aiotek.com.sg"
 
-settings = Settings()
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()

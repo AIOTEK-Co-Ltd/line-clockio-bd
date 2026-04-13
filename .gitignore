@@ -10,3 +10,6 @@ build/
 .coverage
 htmlcov/
 test.db
+.venv/
+venv/
+.DS_Store

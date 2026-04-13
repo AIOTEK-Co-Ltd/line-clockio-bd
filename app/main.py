@@ -1,15 +1,21 @@
 from fastapi import FastAPI
 from starlette.middleware.sessions import SessionMiddleware
 
-from app.config import settings
+from app.config import get_settings
 from app.routers import webhook, liff, dashboard
 
-app = FastAPI(title="LINE Clockio", docs_url=None, redoc_url=None)
+_settings = get_settings()
+
+app = FastAPI(
+    title="LINE Clockio",
+    docs_url="/docs" if _settings.debug else None,
+    redoc_url="/redoc" if _settings.debug else None,
+)
 
 app.add_middleware(
     SessionMiddleware,
-    secret_key=settings.session_secret_key,
-    https_only=False,  # Railway terminates SSL at proxy; app receives HTTP
+    secret_key=_settings.session_secret_key,
+    https_only=not _settings.debug,  # Cloud Run terminates TLS at proxy; force https_only in prod
 )
 
 app.include_router(webhook.router)
