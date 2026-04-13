@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     line_channel_secret: str
     liff_id: str
     liff_channel_id: str
+    liff_channel_secret: str
     database_url: str
     resend_api_key: str
     resend_from_email: str
