@@ -21,6 +21,7 @@ class Employee(Base):
     email: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     display_name: Mapped[Optional[str]] = mapped_column(String(100))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_manager: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[Optional[datetime.datetime]] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

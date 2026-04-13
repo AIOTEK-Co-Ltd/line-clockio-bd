@@ -21,6 +21,7 @@ def upgrade() -> None:
         sa.Column("email", sa.String(100), unique=True, nullable=False),
         sa.Column("display_name", sa.String(100)),
         sa.Column("is_active", sa.Boolean(), nullable=False, server_default="true"),
+        sa.Column("is_manager", sa.Boolean(), nullable=False, server_default="false"),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
         sa.Column("updated_at", sa.DateTime(timezone=True)),
     )
@@ -39,22 +40,9 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
     )
     op.create_index("ix_check_ins_id", "check_ins", ["id"])
-    op.create_index("ix_check_ins_employee_id", "check_ins", ["employee_id"])
     op.create_index(
         "ix_check_ins_employee_checked_at", "check_ins", ["employee_id", "checked_at"]
     )
-
-    op.create_table(
-        "managers",
-        sa.Column("id", sa.Integer(), primary_key=True),
-        sa.Column("google_email", sa.String(254), unique=True, nullable=False),
-        sa.Column("google_sub", sa.String(128), unique=True, nullable=False),
-        sa.Column("display_name", sa.String(100)),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
-    )
-    op.create_index("ix_managers_id", "managers", ["id"])
-    op.create_index("ix_managers_google_email", "managers", ["google_email"])
-    op.create_index("ix_managers_google_sub", "managers", ["google_sub"])
 
     op.create_table(
         "email_verifications",
@@ -77,13 +65,7 @@ def downgrade() -> None:
     op.drop_index("ix_email_verifications_id", "email_verifications")
     op.drop_table("email_verifications")
 
-    op.drop_index("ix_managers_google_sub", "managers")
-    op.drop_index("ix_managers_google_email", "managers")
-    op.drop_index("ix_managers_id", "managers")
-    op.drop_table("managers")
-
     op.drop_index("ix_check_ins_employee_checked_at", "check_ins")
-    op.drop_index("ix_check_ins_employee_id", "check_ins")
     op.drop_index("ix_check_ins_id", "check_ins")
     op.execute("DROP TYPE IF EXISTS checkintype")
     op.drop_table("check_ins")

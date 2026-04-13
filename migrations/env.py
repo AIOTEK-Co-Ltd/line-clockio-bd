@@ -11,9 +11,9 @@ if config.config_file_name is not None:
 # Import all models so Alembic sees them
 import app.models  # noqa: F401 — triggers __init__.py re-exports, registers all tables
 from app.database import Base
-from app.config import settings
+from app.config import get_settings
 
-config.set_main_option("sqlalchemy.url", settings.database_url)
+config.set_main_option("sqlalchemy.url", get_settings().database_url)
 target_metadata = Base.metadata
 
 

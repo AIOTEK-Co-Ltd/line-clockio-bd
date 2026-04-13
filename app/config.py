@@ -19,11 +19,6 @@ class Settings(BaseSettings):
     app_base_url: str
     timezone: str = "Asia/Taipei"
 
-    # Google OAuth (for Manager Dashboard)
-    google_client_id: str
-    google_client_secret: str
-    google_allowed_domain: str = "aiotek.com.sg"
-
 
 @lru_cache
 def get_settings() -> Settings:
