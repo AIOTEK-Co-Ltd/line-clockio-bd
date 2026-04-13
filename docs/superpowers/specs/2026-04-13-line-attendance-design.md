@@ -1,8 +1,49 @@
 # LINE 打卡系統設計規格
 
 **日期：** 2026-04-13
+**更新：** 2026-04-13（部署平台改為 GCP，PR 工作流程）
 **專案：** line-clockio-bd
-**狀態：** 待審閱
+**狀態：** 進行中
+
+---
+
+## 0. 專案工作流程（Project Workflow）
+
+本專案為公司內部小型專案，以 PRD 作為唯一核心文件（不需 SOW 或 NRE Budget）。
+
+### 0.1 PRD 結構
+
+```
+PRD
+├── Product Summary      ← 第 1 節（背景與目標）
+├── Product Spec         ← 第 3–8 節（架構、DB、流程、安全、MVP 範圍）
+│   ├── * 功能清單（Features）
+│   └── * 詳細規格（Specifications）
+└── Timeline             ← 第 0.2 節（下方）
+```
+
+### 0.2 開發時程（Timeline）
+
+```
+4/13        4/14              4/17          4/18–4/23       4/24–25
+  │            │                │               │               │
+  ▼            ▼                ▼               ▼               ▼
+[PRD 完成] → [核准 + Kickoff] → [MVP 交付] → [Sprint 衝刺] → [Production]
+  今天         明天              本週五        下週完整功能     正式上線
+  規格定稿     開始開發          核心流程可用   Dashboard+QA    所有員工可用
+```
+
+**各階段目標：**
+
+- **PRD 完成（4/13，今天）：** 規格確定，交由主管與 PM 審閱。
+
+- **核准 + Kickoff（4/14，明天）：** PRD 核准；完成開發環境建置（GCP Cloud Run/Cloud SQL、LINE Developer Console（需 Tim 協助開帳號）、GitHub）；確認分工。
+
+- **MVP（4/17，本週五）：** 員工綁定（OTP）可跑通；LIFF 打卡（Geolocation + IP）寫入 DB；重複打卡防護；Webhook 基本路由正常。
+
+- **Sprint（4/18–4/23）：** 主管 Web Dashboard（登入、篩選、CSV 匯出）；主管 LINE 查詢指令；iOS／Android 實機測試；Bug 修正。
+
+- **Production（4/24–4/25）：** GCP Cloud Run 正式部署；Webhook URL 設定完成；員工完成綁定培訓；正式上線。
 
 ---
 
@@ -13,15 +54,16 @@
 **成功標準：**
 - 員工可透過 LINE 完成上班 / 下班打卡，並記錄真實位置與 IP
 - 主管可透過 Web Dashboard 或 LINE 指令查詢出勤紀錄
-- 系統可在 Railway 上穩定運行，資料保存至少 5 年
+- 系統可在 GCP 上穩定運行，資料保存至少 5 年
 
 ---
 
 ## 2. 範疇限制
 
 - 員工人數：50 人以下
-- 部署平台：Railway（含 PostgreSQL）
+- 部署平台：GCP（Cloud Run + Cloud SQL PostgreSQL）— 公司已有帳號，無需另外申請
 - 前端：LIFF mini-app（僅打卡用）；主管後台為 Jinja2 server-side render
+- LINE 開發者帳號：需 Tim 協助建立 LINE Official Account + Messaging API + LIFF App
 - 不包含：薪資計算、排班管理、HR 系統整合、多主管權限層級
 
 ---
@@ -36,7 +78,7 @@
              │ Webhook events      │ HTTPS API calls
              ▼                    ▼
 ┌─────────────────────────────────────────┐
-│           FastAPI (Railway)             │
+│        FastAPI (GCP Cloud Run)          │
 │                                         │
 │  POST /webhook       文字訊息互動        │
 │  POST /liff/checkin  打卡（位置+IP）     │
@@ -46,7 +88,7 @@
                   │
        ┌──────────▼──────────┐
        │  PostgreSQL          │
-       │  (Railway add-on)    │
+       │  (GCP Cloud SQL)     │
        └─────────────────────┘
 ```
 
@@ -55,11 +97,21 @@
 | 項目 | 選擇 | 理由 |
 |------|------|------|
 | 後端框架 | FastAPI (Python) | 開發速度快、自動 API 文件 |
-| 資料庫 | PostgreSQL | 生產級穩定，Railway 一鍵整合 |
+| 資料庫 | PostgreSQL（GCP Cloud SQL）| 生產級穩定，公司 GCP 帳號直接使用 |
 | 打卡介面 | LINE LIFF mini-app | 唯一能取得 Geolocation + 真實 IP 的方式 |
 | 主管後台 | Jinja2 templates | 後端工程師可直接開發，無需前端框架 |
-| 部署 | Railway | HTTPS 自動提供，GitHub push 自動部署 |
-| Email 發送 | Resend（免費方案） | OTP 發送，比 Gmail SMTP 穩定 |
+| 部署 | GCP Cloud Run | 容器化、HTTPS 自動、按用量計費、公司已有帳號 |
+| Email 發送 | Resend（免費方案）| OTP 發送，比 Gmail SMTP 穩定 |
+
+### 部署平台比較
+
+| 平台 | 估計月費 | 優點 | 缺點 | 結論 |
+|------|---------|------|------|------|
+| **GCP Cloud Run + Cloud SQL** | Cloud SQL db-f1-micro ~$7/月；Cloud Run 免費額度高 | **公司已有帳號**，無需另外申請付款；企業級安全；IAM 整合 | 設定流程較繁瑣（Dockerfile、gcloud CLI）| ✅ **選用** |
+| Railway | $5/月 Hobby Plan | 設定最簡單，一鍵部署 | 需另開帳號付款；資料不在公司 GCP 環境內 | — |
+| Fly.io | 免費方案有限，付費按用量 | FastAPI 友善，全球 edge | 需另開帳號；台灣 region 較少 | — |
+| Zeabur（台灣） | 按用量計費 | 台灣服務，中文支援 | 較新，生態較小，穩定性待驗證 | — |
+| Linode (Akamai) | VPS $5/月起 | 成本低、彈性高 | 需自行管理伺服器、SSL、監控 | — |
 
 ---
 
@@ -174,7 +226,8 @@ email_verifications
 |------|------|------|
 | LIFF Geolocation 在 iOS LINE 受限 | iOS 需使用者手動允許 | 上線前實機測試，文件說明如何開啟定位權限 |
 | Email OTP 進垃圾信 | 員工收不到 OTP | 使用 Resend，設定 SPF/DKIM |
-| Railway 冷啟動 | 免費方案 sleep 後首次回應慢 | 升級至 Hobby Plan（$5/月）或設 keep-alive ping |
+| GCP Cloud Run 冷啟動 | 無流量時 container 回收，首次回應約 1–3 秒 | 設定最小 instance 數為 1（min-instances=1），或設定 Cloud Scheduler keep-alive |
+| LINE 帳號設定延遲 | 需 Tim 協助開 LINE Developer 帳號 | 提早聯繫 Tim，不要等到開發完才申請 |
 | 時區顯示錯誤 | 打卡時間顯示不對 | 全程 TIMESTAMPTZ，後端統一轉 UTC+8 顯示 |
 | 代打（借手機） | 無法 100% 防止 | Geolocation + IP 已提供稽核證據，足夠稽核用途 |
 
@@ -202,9 +255,9 @@ email_verifications
 ### Day 1 — 地基建設 + 核心打卡
 
 **上午：環境設定**
-- LINE Developer Console：建立 Official Account + Messaging API Channel + LIFF App
-- Railway：建立 Project、PostgreSQL、設定環境變數
-- GitHub repo 確認、推上 spec + plan
+- LINE Developer Console：聯繫 Tim 建立 Official Account + Messaging API Channel + LIFF App
+- GCP：建立 Cloud Run Service、Cloud SQL PostgreSQL instance、設定環境變數（Secret Manager）
+- GitHub repo 確認、推上 spec + plan（開 PR 流程）
 
 **下午：核心功能**
 - FastAPI 骨架 + SQLAlchemy models + Alembic migration
@@ -223,30 +276,34 @@ email_verifications
 **下午：整合 + 測試**
 - 主管 LINE 查詢指令（「查詢 YYYY-MM」）
 - 重複打卡防護邏輯
-- Railway 正式部署、Webhook URL 設定
+- GCP Cloud Run 部署、設定 Webhook URL（在 LINE Developer Console）
 - 實機測試（iPhone + Android）
-- 推上 GitHub
+- 推上 GitHub（開 PR 供主管 review）
 
 ---
 
 ## 10. 環境變數清單
 
 ```env
-# LINE
+# LINE（需 Tim 協助設定）
 LINE_CHANNEL_ACCESS_TOKEN=
 LINE_CHANNEL_SECRET=
 LIFF_ID=
+LIFF_CHANNEL_ID=        # LINE Login channel ID，用於 LIFF ID Token 驗證
 
-# Database
-DATABASE_URL=
+# Database（GCP Cloud SQL）
+DATABASE_URL=postgresql://user:pass@/dbname?host=/cloudsql/project:region:instance
 
 # Email (Resend)
 RESEND_API_KEY=
+RESEND_FROM_EMAIL=      # 需在 Resend 驗證的寄件網域
 
 # Auth
-SESSION_SECRET_KEY=
+SESSION_SECRET_KEY=     # openssl rand -hex 32
 
 # App
-APP_BASE_URL=           # Railway 提供的 HTTPS URL，供 LIFF redirect 使用
+APP_BASE_URL=           # GCP Cloud Run 提供的 HTTPS URL（e.g. https://xxx.run.app）
 TIMEZONE=Asia/Taipei
 ```
+
+> **GCP 建議做法：** 將以上 secrets 儲存於 GCP Secret Manager，在 Cloud Run 透過 `--set-secrets` 或 Volume Mount 注入，避免在 `.env` 或環境變數中明文存放。
