@@ -53,9 +53,12 @@ async def callback(
     if not state or state != stored_state:
         return RedirectResponse("/dashboard/login?error=invalid_state")
 
+    if not code:
+        return RedirectResponse("/dashboard/login?error=missing_code")
+
     settings = get_settings()
 
-    # Exchange authorization code for tokens
+    # Exchange authorization code for tokens, then verify ID token (single connection)
     async with httpx.AsyncClient() as client:
         token_resp = await client.post(
             _LINE_TOKEN_URL,
@@ -67,15 +70,13 @@ async def callback(
                 "client_secret": settings.liff_channel_secret,
             },
         )
-    if token_resp.status_code != 200:
-        return RedirectResponse("/dashboard/login?error=token_exchange_failed")
+        if token_resp.status_code != 200:
+            return RedirectResponse("/dashboard/login?error=token_exchange_failed")
 
-    id_token = token_resp.json().get("id_token")
-    if not id_token:
-        return RedirectResponse("/dashboard/login?error=missing_id_token")
+        id_token = token_resp.json().get("id_token")
+        if not id_token:
+            return RedirectResponse("/dashboard/login?error=missing_id_token")
 
-    # Verify ID token with LINE and extract LINE user ID
-    async with httpx.AsyncClient() as client:
         verify_resp = await client.post(
             _LINE_VERIFY_URL,
             data={"id_token": id_token, "client_id": settings.liff_channel_id},

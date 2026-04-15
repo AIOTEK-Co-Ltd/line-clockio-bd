@@ -17,9 +17,13 @@ class Employee(Base):
     __tablename__ = "employees"
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
-    line_user_id: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
+    # HR-assigned fields — may be NULL when employee self-registers first
+    employee_number: Mapped[Optional[str]] = mapped_column(String(20), unique=True, nullable=True, index=True)
+    full_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    # LINE UID — NULL when HR pre-loads record before employee completes binding
+    line_user_id: Mapped[Optional[str]] = mapped_column(String(50), unique=True, nullable=True, index=True)
     email: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
-    display_name: Mapped[Optional[str]] = mapped_column(String(100))
+    display_name: Mapped[Optional[str]] = mapped_column(String(100))  # LINE profile name (fallback)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_manager: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[Optional[datetime.datetime]] = mapped_column(

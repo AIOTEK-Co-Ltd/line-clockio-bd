@@ -17,7 +17,11 @@ def upgrade() -> None:
     op.create_table(
         "employees",
         sa.Column("id", sa.Integer(), primary_key=True),
-        sa.Column("line_user_id", sa.String(50), unique=True, nullable=False),
+        # HR-assigned fields — nullable until HR fills them in
+        sa.Column("employee_number", sa.String(20), unique=True, nullable=True),
+        sa.Column("full_name", sa.String(100), nullable=True),
+        # LINE UID — nullable until employee completes binding
+        sa.Column("line_user_id", sa.String(50), unique=True, nullable=True),
         sa.Column("email", sa.String(100), unique=True, nullable=False),
         sa.Column("display_name", sa.String(100)),
         sa.Column("is_active", sa.Boolean(), nullable=False, server_default="true"),
@@ -27,6 +31,7 @@ def upgrade() -> None:
     )
     op.create_index("ix_employees_id", "employees", ["id"])
     op.create_index("ix_employees_line_user_id", "employees", ["line_user_id"])
+    op.create_index("ix_employees_employee_number", "employees", ["employee_number"])
 
     op.create_table(
         "check_ins",
@@ -70,6 +75,7 @@ def downgrade() -> None:
     op.execute("DROP TYPE IF EXISTS checkintype")
     op.drop_table("check_ins")
 
+    op.drop_index("ix_employees_employee_number", "employees")
     op.drop_index("ix_employees_line_user_id", "employees")
     op.drop_index("ix_employees_id", "employees")
     op.drop_table("employees")

@@ -16,6 +16,7 @@ app.add_middleware(
     SessionMiddleware,
     secret_key=_settings.session_secret_key,
     https_only=not _settings.debug,  # Cloud Run terminates TLS at proxy; force https_only in prod
+    max_age=8 * 3600,  # 8-hour session expiry
 )
 
 app.include_router(webhook.router)
