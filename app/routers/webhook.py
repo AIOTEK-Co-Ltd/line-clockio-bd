@@ -4,7 +4,9 @@ import json
 import re
 import secrets
 from base64 import b64encode
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
@@ -12,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.database import get_db
+from app.models.check_in import CheckIn, CheckInType
 from app.models.email_verification import EmailVerification
 from app.models.employee import Employee
 from app.services.mailgun import send_otp_email
@@ -60,7 +63,7 @@ async def webhook(
         elif _OTP_RE.match(text):
             await _handle_otp_verification(db, line_user_id, text, reply_token)
         elif text.lower().startswith("query "):
-            await _reply_text(reply_token, "查詢功能開發中，請使用網頁後台查詢出勤紀錄。")
+            await _handle_query(db, line_user_id, text[6:].strip(), reply_token)
 
     return {"status": "ok"}
 
@@ -152,6 +155,80 @@ async def _handle_otp_verification(
         reply_token,
         "✅ 綁定完成！您現在可以開始打卡。\n請點選選單中的「上班打卡」或「下班打卡」。",
     )
+
+
+# ── Manager LINE query ────────────────────────────────────────────────────────
+
+async def _handle_query(
+    db: Session, line_user_id: str, month_str: str, reply_token: str
+) -> None:
+    # Only managers may query
+    manager = (
+        db.query(Employee)
+        .filter(
+            Employee.line_user_id == line_user_id,
+            Employee.is_manager.is_(True),
+            Employee.is_active.is_(True),
+        )
+        .first()
+    )
+    if not manager:
+        await _reply_text(reply_token, "此功能僅限管理員使用。")
+        return
+
+    # Parse YYYY-MM
+    try:
+        year, month = map(int, month_str.split("-"))
+        start = datetime(year, month, 1, tzinfo=timezone.utc)
+        end = datetime(year + (month // 12), (month % 12) + 1, 1, tzinfo=timezone.utc)
+    except (ValueError, AttributeError):
+        await _reply_text(reply_token, "格式錯誤，請輸入：query YYYY-MM（例：query 2026-04）")
+        return
+
+    check_ins = (
+        db.query(CheckIn)
+        .join(Employee)
+        .filter(
+            CheckIn.checked_at >= start,
+            CheckIn.checked_at < end,
+            Employee.is_active.is_(True),
+        )
+        .order_by(Employee.full_name, CheckIn.checked_at)
+        .all()
+    )
+
+    if not check_ins:
+        await _reply_text(reply_token, f"{month_str} 無任何打卡紀錄。")
+        return
+
+    settings = get_settings()
+    tz = ZoneInfo(settings.timezone)
+    summary: dict[str, dict] = defaultdict(
+        lambda: {"days": set(), "clock_ins": 0, "clock_outs": 0}
+    )
+    for ci in check_ins:
+        emp = ci.employee
+        name = emp.full_name or emp.display_name or emp.email
+        summary[name]["days"].add(ci.checked_at.astimezone(tz).date())
+        if ci.type == CheckInType.clock_in:
+            summary[name]["clock_ins"] += 1
+        else:
+            summary[name]["clock_outs"] += 1
+
+    lines = [f"📊 {month_str} 出勤摘要", ""]
+    for name, data in sorted(summary.items()):
+        lines += [
+            f"👤 {name}",
+            f"   出勤天數：{len(data['days'])} 天",
+            f"   上班：{data['clock_ins']} 次　下班：{data['clock_outs']} 次",
+            "",
+        ]
+
+    msg = "\n".join(lines).rstrip()
+    if len(msg) > 4900:
+        msg = msg[:4900] + "\n⋯（請至後台查看完整紀錄）"
+
+    await _reply_text(reply_token, msg)
 
 
 # ── LINE API helpers ──────────────────────────────────────────────────────────

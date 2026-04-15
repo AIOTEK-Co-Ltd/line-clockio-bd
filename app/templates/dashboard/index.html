@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}出勤紀錄{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h5 class="mb-0 fw-bold">出勤紀錄</h5>
+</div>
+
+{# ── Filter form ── #}
+<form method="get" action="/dashboard/" class="card card-body mb-3 p-3">
+  <div class="row g-2 align-items-end">
+    <div class="col-sm-4">
+      <label class="form-label small mb-1">員工</label>
+      <select name="employee_id" class="form-select form-select-sm">
+        <option value="">全部員工</option>
+        {% for emp in employees %}
+        <option value="{{ emp.id }}"
+          {% if filters.employee_id == emp.id %}selected{% endif %}>
+          {{ emp.full_name or emp.display_name or emp.email }}
+        </option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-sm-3">
+      <label class="form-label small mb-1">開始日期</label>
+      <input type="date" name="date_from" class="form-control form-control-sm"
+             value="{{ filters.date_from }}">
+    </div>
+    <div class="col-sm-3">
+      <label class="form-label small mb-1">結束日期</label>
+      <input type="date" name="date_to" class="form-control form-control-sm"
+             value="{{ filters.date_to }}">
+    </div>
+    <div class="col-sm-2 d-flex gap-2">
+      <button type="submit" class="btn btn-primary btn-sm flex-fill">篩選</button>
+      <a href="/dashboard/" class="btn btn-outline-secondary btn-sm">清除</a>
+    </div>
+  </div>
+</form>
+
+{# ── Export button ── #}
+<div class="d-flex justify-content-between align-items-center mb-2">
+  <span class="text-muted small">共 {{ check_ins|length }} 筆（最多顯示 500 筆）</span>
+  <a href="/dashboard/export?{% if filters.employee_id %}employee_id={{ filters.employee_id }}&{% endif %}{% if filters.date_from %}date_from={{ filters.date_from }}&{% endif %}{% if filters.date_to %}date_to={{ filters.date_to }}{% endif %}"
+     class="btn btn-outline-success btn-sm">
+    匯出 CSV（稽核用）
+  </a>
+</div>
+
+{# ── Records table ── #}
+{% if check_ins %}
+<div class="table-responsive">
+  <table class="table table-sm table-hover table-bordered bg-white">
+    <thead class="table-light">
+      <tr>
+        <th>員工編號</th>
+        <th>姓名</th>
+        <th>Email</th>
+        <th>打卡類型</th>
+        <th>打卡時間（UTC+8）</th>
+        <th>GPS 緯度</th>
+        <th>GPS 經度</th>
+        <th>IP 位址</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for ci in check_ins %}
+      <tr>
+        <td class="text-muted">{{ ci.employee.employee_number or "—" }}</td>
+        <td>{{ ci.employee.full_name or ci.employee.display_name or "—" }}</td>
+        <td class="small text-muted">{{ ci.employee.email }}</td>
+        <td>
+          {% if ci.type.value == "clock_in" %}
+            <span class="badge bg-success">上班打卡</span>
+          {% else %}
+            <span class="badge bg-secondary">下班打卡</span>
+          {% endif %}
+        </td>
+        <td class="small">{{ ci.checked_at.astimezone(tz).strftime("%Y-%m-%d %H:%M:%S") }}</td>
+        <td class="small text-muted">{{ "%.6f"|format(ci.latitude) }}</td>
+        <td class="small text-muted">{{ "%.6f"|format(ci.longitude) }}</td>
+        <td class="small text-muted">{{ ci.ip_address }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="alert alert-light text-center text-muted">目前沒有符合條件的打卡紀錄。</div>
+{% endif %}
+{% endblock %}
