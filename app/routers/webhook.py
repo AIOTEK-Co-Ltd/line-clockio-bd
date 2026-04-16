@@ -23,6 +23,7 @@ router = APIRouter(tags=["webhook"])
 
 _EMAIL_RE = re.compile(r"^[\w.+-]+@[\w-]+\.[a-zA-Z]{2,}$")
 _OTP_RE = re.compile(r"^\d{6}$")
+_MAX_OTP_ATTEMPTS = 5
 
 
 def _verify_signature(body: bytes, signature: str, channel_secret: str) -> bool:
@@ -31,6 +32,11 @@ def _verify_signature(body: bytes, signature: str, channel_secret: str) -> bool:
         hmac.new(channel_secret.encode(), body, hashlib.sha256).digest()
     ).decode()
     return hmac.compare_digest(expected, signature)
+
+
+def _hash_otp(otp: str, line_user_id: str) -> str:
+    """SHA-256 hash of OTP salted with the LINE user ID. Never store plaintext."""
+    return hashlib.sha256(f"{line_user_id}:{otp}".encode()).hexdigest()
 
 
 @router.post("/webhook")
@@ -74,12 +80,18 @@ async def _handle_email_submission(
     db: Session, line_user_id: str, email: str, reply_token: str
 ) -> None:
     # Already bound via this LINE account?
-    if db.query(Employee).filter(Employee.line_user_id == line_user_id).first():
+    if db.query(Employee).filter(
+        Employee.line_user_id == line_user_id,
+        Employee.is_active.is_(True),
+    ).first():
         await _reply_text(reply_token, "您的 LINE 帳號已完成綁定，無需重複操作。")
         return
 
     # Email already bound to a different LINE account?
-    existing = db.query(Employee).filter(Employee.email == email).first()
+    existing = db.query(Employee).filter(
+        Employee.email == email,
+        Employee.is_active.is_(True),
+    ).first()
     if existing and existing.line_user_id:
         await _reply_text(
             reply_token,
@@ -101,7 +113,7 @@ async def _handle_email_submission(
     db.add(EmailVerification(
         line_user_id=line_user_id,
         email=email,
-        otp_code=otp,
+        otp_code=_hash_otp(otp, line_user_id),  # store hash, never plaintext
         expires_at=expires,
     ))
     db.commit()
@@ -121,14 +133,16 @@ async def _handle_otp_verification(
 ) -> None:
     now = datetime.now(timezone.utc)
 
+    # Find the most recent valid (unused, unexpired, not locked) OTP for this UID
     verification = (
         db.query(EmailVerification)
         .filter(
             EmailVerification.line_user_id == line_user_id,
-            EmailVerification.otp_code == otp_code,
             EmailVerification.used.is_(False),
             EmailVerification.expires_at > now,
+            EmailVerification.failed_attempts < _MAX_OTP_ATTEMPTS,
         )
+        .order_by(EmailVerification.id.desc())
         .first()
     )
 
@@ -136,10 +150,27 @@ async def _handle_otp_verification(
         await _reply_text(reply_token, "驗證碼無效或已過期，請重新傳送您的公司 Email。")
         return
 
+    # Verify hash — increment counter on mismatch
+    if _hash_otp(otp_code, line_user_id) != verification.otp_code:
+        verification.failed_attempts += 1
+        db.commit()
+        remaining = _MAX_OTP_ATTEMPTS - verification.failed_attempts
+        if remaining > 0:
+            await _reply_text(reply_token, f"驗證碼錯誤，還剩 {remaining} 次機會。")
+        else:
+            await _reply_text(
+                reply_token,
+                "驗證碼嘗試次數過多，請重新傳送您的公司 Email 取得新驗證碼。",
+            )
+        return
+
     verification.used = True
 
     # HR-initiated path: employee record already exists (email pre-loaded) but unbound
-    employee = db.query(Employee).filter(Employee.email == verification.email).first()
+    employee = db.query(Employee).filter(
+        Employee.email == verification.email,
+        Employee.is_active.is_(True),
+    ).first()
     if employee:
         # Guard against race: another LINE user may have bound this email between
         # OTP issuance and verification (overwrite vulnerability fix)

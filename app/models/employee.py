@@ -18,6 +18,8 @@ class Employee(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     # HR-assigned fields — may be NULL when employee self-registers first
+    # UNIQUE + nullable: PostgreSQL (our target DB) allows multiple NULL values in a
+    # UNIQUE column (NULL ≠ NULL per SQL standard), so this is safe.
     employee_number: Mapped[Optional[str]] = mapped_column(String(20), unique=True, nullable=True, index=True)
     full_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     # LINE UID — NULL when HR pre-loads record before employee completes binding

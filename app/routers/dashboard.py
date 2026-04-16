@@ -1,4 +1,6 @@
+import asyncio
 import csv
+import hmac
 import io
 import secrets
 from datetime import datetime
@@ -6,10 +8,10 @@ from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
 import httpx
-from fastapi import APIRouter, Depends, File, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, contains_eager
 
 from app.config import get_settings
 from app.database import get_db
@@ -23,14 +25,29 @@ templates = Jinja2Templates(directory="app/templates")
 _LINE_AUTH_URL = "https://access.line.me/oauth2/v2.1/authorize"
 _LINE_TOKEN_URL = "https://api.line.me/oauth2/v2.1/token"
 _LINE_VERIFY_URL = "https://api.line.me/oauth2/v2.1/verify"
+_MAX_IMPORT_BYTES = 5 * 1024 * 1024  # 5 MB
 
 
 def _redirect_uri() -> str:
     return f"{get_settings().app_base_url}/dashboard/callback"
 
 
-def _require_manager(request: Request) -> bool:
+def _is_manager(request: Request) -> bool:
+    """Return True if the request has a valid manager session."""
     return bool(request.session.get("manager_id"))
+
+
+def _get_csrf_token(request: Request) -> str:
+    """Return (and lazily create) a per-session CSRF token."""
+    if "csrf_token" not in request.session:
+        request.session["csrf_token"] = secrets.token_hex(32)
+    return request.session["csrf_token"]
+
+
+def _csrf_ok(request: Request, token: str) -> bool:
+    """Constant-time comparison of submitted token against session token."""
+    expected = request.session.get("csrf_token", "")
+    return bool(expected and hmac.compare_digest(expected, token))
 
 
 def _csv_safe(value: str | None) -> str:
@@ -39,11 +56,44 @@ def _csv_safe(value: str | None) -> str:
     return ("'" + s) if s and s[0] in ("=", "+", "-", "@", "\t", "\r") else s
 
 
+def _build_checkin_query(
+    db: Session,
+    tz: ZoneInfo,
+    employee_id: int | None,
+    date_from: str | None,
+    date_to: str | None,
+):
+    """Build a filtered CheckIn query — shared by the list view and CSV export."""
+    query = (
+        db.query(CheckIn)
+        .join(CheckIn.employee)
+        .filter(Employee.is_active.is_(True))
+        .options(contains_eager(CheckIn.employee))
+    )
+    if employee_id:
+        query = query.filter(CheckIn.employee_id == employee_id)
+    if date_from:
+        try:
+            dt_from = datetime.strptime(date_from, "%Y-%m-%d").replace(tzinfo=tz)
+            query = query.filter(CheckIn.checked_at >= dt_from)
+        except ValueError:
+            pass
+    if date_to:
+        try:
+            dt_to = datetime.strptime(date_to, "%Y-%m-%d").replace(
+                hour=23, minute=59, second=59, tzinfo=tz
+            )
+            query = query.filter(CheckIn.checked_at <= dt_to)
+        except ValueError:
+            pass
+    return query
+
+
 # ── Auth ──────────────────────────────────────────────────────────────────────
 
 @router.get("/login")
 async def login(request: Request, error: str | None = None):
-    if _require_manager(request):
+    if _is_manager(request):
         return RedirectResponse("/dashboard/")
     return templates.TemplateResponse(
         "dashboard/login.html",
@@ -149,7 +199,7 @@ async def dashboard_home(
     date_from: str | None = None,
     date_to: str | None = None,
 ):
-    if not _require_manager(request):
+    if not _is_manager(request):
         return RedirectResponse("/dashboard/login")
 
     settings = get_settings()
@@ -162,25 +212,12 @@ async def dashboard_home(
         .all()
     )
 
-    query = db.query(CheckIn).join(Employee).filter(Employee.is_active.is_(True))
-    if employee_id:
-        query = query.filter(CheckIn.employee_id == employee_id)
-    if date_from:
-        try:
-            dt_from = datetime.strptime(date_from, "%Y-%m-%d").replace(tzinfo=tz)
-            query = query.filter(CheckIn.checked_at >= dt_from)
-        except ValueError:
-            pass
-    if date_to:
-        try:
-            dt_to = datetime.strptime(date_to, "%Y-%m-%d").replace(
-                hour=23, minute=59, second=59, tzinfo=tz
-            )
-            query = query.filter(CheckIn.checked_at <= dt_to)
-        except ValueError:
-            pass
-
-    check_ins = query.order_by(CheckIn.checked_at.desc()).limit(500).all()
+    check_ins = (
+        _build_checkin_query(db, tz, employee_id, date_from, date_to)
+        .order_by(CheckIn.checked_at.desc())
+        .limit(500)
+        .all()
+    )
 
     return templates.TemplateResponse(
         "dashboard/index.html",
@@ -208,33 +245,20 @@ async def export_csv(
     date_from: str | None = None,
     date_to: str | None = None,
 ):
-    if not _require_manager(request):
+    if not _is_manager(request):
         return RedirectResponse("/dashboard/login")
 
     settings = get_settings()
     tz = ZoneInfo(settings.timezone)
 
-    query = db.query(CheckIn).join(Employee).filter(Employee.is_active.is_(True))
-    if employee_id:
-        query = query.filter(CheckIn.employee_id == employee_id)
-    if date_from:
-        try:
-            dt_from = datetime.strptime(date_from, "%Y-%m-%d").replace(tzinfo=tz)
-            query = query.filter(CheckIn.checked_at >= dt_from)
-        except ValueError:
-            pass
-    if date_to:
-        try:
-            dt_to = datetime.strptime(date_to, "%Y-%m-%d").replace(
-                hour=23, minute=59, second=59, tzinfo=tz
-            )
-            query = query.filter(CheckIn.checked_at <= dt_to)
-        except ValueError:
-            pass
-
-    check_ins = query.order_by(CheckIn.checked_at.asc()).all()
+    check_ins = (
+        _build_checkin_query(db, tz, employee_id, date_from, date_to)
+        .order_by(CheckIn.checked_at.asc())
+        .all()
+    )
     exported_at = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
 
+    # Use StringIO then encode to utf-8-sig bytes so the BOM is actually written
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow([
@@ -257,11 +281,12 @@ async def export_csv(
             exported_at,
         ])
 
-    output.seek(0)
+    # Encode to utf-8-sig so Excel on Windows receives the BOM byte sequence
+    csv_bytes = output.getvalue().encode("utf-8-sig")
     filename = f"attendance_{datetime.now(tz).strftime('%Y%m%d_%H%M%S')}.csv"
     return StreamingResponse(
-        iter([output.getvalue()]),
-        media_type="text/csv; charset=utf-8-sig",  # utf-8-sig for Excel compatibility
+        iter([csv_bytes]),
+        media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
@@ -277,7 +302,7 @@ async def employee_list(
     updated: int | None = None,
     errors: int | None = None,
 ):
-    if not _require_manager(request):
+    if not _is_manager(request):
         return RedirectResponse("/dashboard/login")
 
     employees = (
@@ -294,6 +319,7 @@ async def employee_list(
         {
             "request": request,
             "employees": employees,
+            "csrf_token": _get_csrf_token(request),
             "import_result": {
                 "shown": imported == 1,
                 "created": created or 0,
@@ -310,12 +336,19 @@ async def employee_list(
 async def hr_import(
     request: Request,
     file: UploadFile = File(...),
+    csrf_token: str = Form(...),
     db: Session = Depends(get_db),
 ):
-    if not _require_manager(request):
+    if not _is_manager(request):
         return RedirectResponse("/dashboard/login")
 
-    content = await file.read()
+    if not _csrf_ok(request, csrf_token):
+        return RedirectResponse("/dashboard/employees?error=csrf", status_code=303)
+
+    content = await file.read(_MAX_IMPORT_BYTES + 1)
+    if len(content) > _MAX_IMPORT_BYTES:
+        return RedirectResponse("/dashboard/employees?error=file_too_large", status_code=303)
+
     try:
         text = content.decode("utf-8-sig")  # handles BOM from Excel exports
     except UnicodeDecodeError:
@@ -350,10 +383,18 @@ async def hr_import(
             to_invite.append((email, full_name or email))
             created += 1
 
-    # Commit all DB changes first — then send emails so a rollback never orphans sent mail
+    # Commit all DB changes first — emails sent after so a rollback never orphans sent mail
     db.commit()
-    for inv_email, inv_name in to_invite:
-        await send_invitation_email(inv_email, inv_name)
+
+    # Send invitation emails concurrently (max 5 in parallel) to avoid Cloud Run timeout
+    sem = asyncio.Semaphore(5)
+
+    async def _send_one(inv_email: str, inv_name: str) -> None:
+        async with sem:
+            await send_invitation_email(inv_email, inv_name)
+
+    await asyncio.gather(*[_send_one(e, n) for e, n in to_invite])
+
     return RedirectResponse(
         f"/dashboard/employees?imported=1&created={created}&updated={updated}&errors={errors}",
         status_code=303,
@@ -366,10 +407,14 @@ async def hr_import(
 async def resend_invite(
     emp_id: int,
     request: Request,
+    csrf_token: str = Form(...),
     db: Session = Depends(get_db),
 ):
-    if not _require_manager(request):
+    if not _is_manager(request):
         return RedirectResponse("/dashboard/login")
+
+    if not _csrf_ok(request, csrf_token):
+        return RedirectResponse("/dashboard/employees?error=csrf", status_code=303)
 
     employee = db.query(Employee).filter(Employee.id == emp_id).first()
     if employee and not employee.line_user_id:

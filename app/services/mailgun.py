@@ -38,7 +38,7 @@ async def send_invitation_email(to_email: str, name: str) -> bool:
     """Send a binding invitation to a newly HR-imported employee."""
     settings = get_settings()
     url, auth = _mailgun_post(settings)
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=10.0) as client:
         resp = await client.post(
             url,
             auth=auth,
