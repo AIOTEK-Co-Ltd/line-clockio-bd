@@ -4,10 +4,9 @@ import hashlib
 import hmac
 from base64 import b64encode
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
+from app.models.check_in import CheckIn, CheckInType
 from app.models.email_verification import EmailVerification
 from app.models.employee import Employee
 from app.routers.webhook import (
@@ -39,6 +38,12 @@ def _add_otp(db, line_user_id: str, email: str, code: str = "123456") -> EmailVe
     return ev
 
 
+def _mock_settings(tz: str = "Asia/Taipei") -> MagicMock:
+    s = MagicMock()
+    s.timezone = tz
+    return s
+
+
 # ── _verify_signature ─────────────────────────────────────────────────────────
 
 def test_verify_sig_valid():
@@ -59,7 +64,6 @@ def test_verify_sig_tampered_body():
 
 # ── _handle_email_submission ──────────────────────────────────────────────────
 
-@pytest.mark.asyncio
 async def test_email_already_bound(db):
     """LINE UID already bound to an employee → no OTP issued."""
     db.add(Employee(email=EMAIL, line_user_id=LINE_UID))
@@ -73,7 +77,6 @@ async def test_email_already_bound(db):
     assert "已完成綁定" in mock_reply.call_args[0][1]
 
 
-@pytest.mark.asyncio
 async def test_email_bound_to_different_uid(db):
     """Email already bound to a different LINE UID → conflict reply, no OTP."""
     db.add(Employee(email=EMAIL, line_user_id="U-someone-else"))
@@ -87,7 +90,6 @@ async def test_email_bound_to_different_uid(db):
     assert "已被其他帳號綁定" in mock_reply.call_args[0][1]
 
 
-@pytest.mark.asyncio
 async def test_email_submission_otp_sent(db):
     """Unbound email → OTP row written and email dispatched."""
     with patch("app.routers.webhook._reply_text", new_callable=AsyncMock) as mock_reply, \
@@ -99,7 +101,6 @@ async def test_email_submission_otp_sent(db):
     assert "驗證碼傳送至" in mock_reply.call_args[0][1]
 
 
-@pytest.mark.asyncio
 async def test_email_submission_mailgun_failure(db):
     """Mailgun request fails → failure reply sent; OTP row still persisted."""
     with patch("app.routers.webhook._reply_text", new_callable=AsyncMock) as mock_reply, \
@@ -111,7 +112,6 @@ async def test_email_submission_mailgun_failure(db):
 
 # ── _handle_otp_verification ──────────────────────────────────────────────────
 
-@pytest.mark.asyncio
 async def test_otp_no_matching_record(db):
     """No matching (unused, unexpired) OTP → invalid reply."""
     with patch("app.routers.webhook._reply_text", new_callable=AsyncMock) as mock_reply, \
@@ -121,7 +121,6 @@ async def test_otp_no_matching_record(db):
     assert "驗證碼無效" in mock_reply.call_args[0][1]
 
 
-@pytest.mark.asyncio
 async def test_otp_hr_initiated_binds_employee(db):
     """HR-pre-loaded employee (no line_user_id) is bound on OTP success."""
     db.add(Employee(email=EMAIL, line_user_id=None))
@@ -137,7 +136,6 @@ async def test_otp_hr_initiated_binds_employee(db):
     assert emp.line_user_id == LINE_UID
 
 
-@pytest.mark.asyncio
 async def test_otp_employee_initiated_creates_record(db):
     """No pre-existing employee → new Employee row created during verification."""
     _add_otp(db, LINE_UID, EMAIL)
@@ -152,7 +150,6 @@ async def test_otp_employee_initiated_creates_record(db):
     assert emp.email == EMAIL
 
 
-@pytest.mark.asyncio
 async def test_otp_race_condition_blocks_second_uid(db):
     """Race: another UID bound the email between OTP issue and verify.
 
@@ -173,7 +170,6 @@ async def test_otp_race_condition_blocks_second_uid(db):
     assert ev.used is True  # OTP must be invalidated to prevent replay
 
 
-@pytest.mark.asyncio
 async def test_otp_same_uid_idempotent(db):
     """Submitting an OTP for an email already bound to the same UID succeeds."""
     db.add(Employee(email=EMAIL, line_user_id=LINE_UID))
@@ -189,7 +185,6 @@ async def test_otp_same_uid_idempotent(db):
 
 # ── _handle_query ─────────────────────────────────────────────────────────────
 
-@pytest.mark.asyncio
 async def test_query_non_manager_rejected(db):
     """Non-manager employee → access denied."""
     db.add(Employee(email=EMAIL, line_user_id=LINE_UID, is_manager=False, is_active=True))
@@ -201,7 +196,6 @@ async def test_query_non_manager_rejected(db):
     assert "僅限管理員" in mock_reply.call_args[0][1]
 
 
-@pytest.mark.asyncio
 async def test_query_invalid_month_format(db):
     """Malformed month string → format error reply."""
     db.add(Employee(email=EMAIL, line_user_id=LINE_UID, is_manager=True, is_active=True))
@@ -213,7 +207,6 @@ async def test_query_invalid_month_format(db):
     assert "格式錯誤" in mock_reply.call_args[0][1]
 
 
-@pytest.mark.asyncio
 async def test_query_year_out_of_range(db):
     """Year < 2000 → out-of-range guard triggers format error reply."""
     db.add(Employee(email=EMAIL, line_user_id=LINE_UID, is_manager=True, is_active=True))
@@ -225,7 +218,6 @@ async def test_query_year_out_of_range(db):
     assert "格式錯誤" in mock_reply.call_args[0][1]
 
 
-@pytest.mark.asyncio
 async def test_query_no_check_ins(db):
     """Valid manager, valid period, no records → no-records reply."""
     db.add(Employee(email=EMAIL, line_user_id=LINE_UID, is_manager=True, is_active=True))
@@ -235,3 +227,47 @@ async def test_query_no_check_ins(db):
         await _handle_query(db, LINE_UID, "2020-01", TOKEN)
 
     assert "無任何打卡紀錄" in mock_reply.call_args[0][1]
+
+
+async def test_query_summary_with_check_ins(db):
+    """Manager queries a month with real check-in data → formatted summary returned."""
+    manager = Employee(
+        email="manager@example.com", line_user_id=LINE_UID,
+        is_manager=True, is_active=True, full_name="Manager Bob",
+    )
+    worker = Employee(
+        email=EMAIL, line_user_id="U-worker",
+        is_manager=False, is_active=True, full_name="Alice",
+    )
+    db.add_all([manager, worker])
+    db.commit()
+    db.refresh(worker)
+
+    db.add(CheckIn(
+        employee_id=worker.id,
+        type=CheckInType.clock_in,
+        latitude=25.033,
+        longitude=121.565,
+        ip_address="127.0.0.1",
+        checked_at=datetime(2026, 4, 1, 9, 0, tzinfo=timezone.utc),
+    ))
+    db.add(CheckIn(
+        employee_id=worker.id,
+        type=CheckInType.clock_out,
+        latitude=25.033,
+        longitude=121.565,
+        ip_address="127.0.0.1",
+        checked_at=datetime(2026, 4, 1, 18, 0, tzinfo=timezone.utc),
+    ))
+    db.commit()
+
+    with patch("app.routers.webhook._reply_text", new_callable=AsyncMock) as mock_reply, \
+         patch("app.routers.webhook.get_settings", return_value=_mock_settings()):
+        await _handle_query(db, LINE_UID, "2026-04", TOKEN)
+
+    reply = mock_reply.call_args[0][1]
+    assert "2026-04 出勤摘要" in reply
+    assert "Alice" in reply
+    assert "出勤天數：1" in reply
+    assert "上班：1" in reply
+    assert "下班：1" in reply
