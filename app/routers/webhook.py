@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+import logging
 import re
 import secrets
 from base64 import b64encode
@@ -10,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, contains_eager
 
 from app.config import get_settings
 from app.database import get_db
@@ -20,6 +21,7 @@ from app.models.employee import Employee
 from app.services.mailgun import send_otp_email
 
 router = APIRouter(tags=["webhook"])
+logger = logging.getLogger(__name__)
 
 _EMAIL_RE = re.compile(r"^[\w.+-]+@[\w-]+\.[a-zA-Z]{2,}$")
 _OTP_RE = re.compile(r"^\d{6}$")
@@ -54,22 +56,25 @@ async def webhook(
     payload = json.loads(body)
 
     for event in payload.get("events", []):
-        if event.get("type") != "message":
-            continue
-        msg = event.get("message", {})
-        if msg.get("type") != "text":
-            continue
+        try:
+            if event.get("type") != "message":
+                continue
+            msg = event.get("message", {})
+            if msg.get("type") != "text":
+                continue
 
-        line_user_id: str = event["source"]["userId"]
-        reply_token: str = event["replyToken"]
-        text: str = msg["text"].strip()
+            line_user_id: str = event["source"]["userId"]
+            reply_token: str = event["replyToken"]
+            text: str = msg["text"].strip()
 
-        if _EMAIL_RE.match(text):
-            await _handle_email_submission(db, line_user_id, text.lower(), reply_token)
-        elif _OTP_RE.match(text):
-            await _handle_otp_verification(db, line_user_id, text, reply_token)
-        elif text.lower().startswith("query "):
-            await _handle_query(db, line_user_id, text[6:].strip(), reply_token)
+            if _EMAIL_RE.match(text):
+                await _handle_email_submission(db, line_user_id, text.lower(), reply_token)
+            elif _OTP_RE.match(text):
+                await _handle_otp_verification(db, line_user_id, text, reply_token)
+            elif text.lower().startswith("query "):
+                await _handle_query(db, line_user_id, text[6:].strip(), reply_token)
+        except Exception:
+            logger.exception("Error processing event %s", event.get("webhookEventId", ""))
 
     return {"status": "ok"}
 
@@ -228,7 +233,8 @@ async def _handle_query(
 
     check_ins = (
         db.query(CheckIn)
-        .join(Employee)
+        .join(CheckIn.employee)
+        .options(contains_eager(CheckIn.employee))
         .filter(
             CheckIn.checked_at >= start,
             CheckIn.checked_at < end,
