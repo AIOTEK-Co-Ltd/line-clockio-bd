@@ -13,6 +13,7 @@ from app.routers.webhook import (
     _handle_email_submission,
     _handle_otp_verification,
     _handle_query,
+    _hash_otp,
     _verify_signature,
 )
 
@@ -25,13 +26,16 @@ def _make_sig(body: bytes, secret: str) -> str:
     return b64encode(hmac.new(secret.encode(), body, hashlib.sha256).digest()).decode()
 
 
-def _add_otp(db, line_user_id: str, email: str, code: str = "123456") -> EmailVerification:
+def _add_otp(
+    db, line_user_id: str, email: str, code: str = "123456", failed_attempts: int = 0
+) -> EmailVerification:
     ev = EmailVerification(
         line_user_id=line_user_id,
         email=email,
-        otp_code=code,
+        otp_code=_hash_otp(code, line_user_id),  # store hash, matching production behaviour
         expires_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
         used=False,
+        failed_attempts=failed_attempts,
     )
     db.add(ev)
     db.commit()
@@ -181,6 +185,39 @@ async def test_otp_same_uid_idempotent(db):
         await _handle_otp_verification(db, LINE_UID, "123456", TOKEN)
 
     assert "綁定完成" in mock_reply.call_args[0][1]
+
+
+async def test_otp_wrong_code_increments_counter(db):
+    """Wrong OTP increments failed_attempts and shows remaining tries."""
+    _add_otp(db, LINE_UID, EMAIL)
+
+    with patch("app.routers.webhook._reply_text", new_callable=AsyncMock) as mock_reply, \
+         patch("app.routers.webhook._get_line_display_name", new_callable=AsyncMock, return_value=None):
+        await _handle_otp_verification(db, LINE_UID, "000000", TOKEN)  # wrong code
+
+    ev = db.query(EmailVerification).filter(EmailVerification.email == EMAIL).first()
+    assert ev.failed_attempts == 1
+    assert "錯誤" in mock_reply.call_args[0][1]
+
+
+async def test_otp_locked_after_max_attempts(db):
+    """After 5 failed attempts the OTP is locked and no further verification allowed."""
+    _add_otp(db, LINE_UID, EMAIL, failed_attempts=4)  # one attempt away from lockout
+
+    with patch("app.routers.webhook._reply_text", new_callable=AsyncMock) as mock_reply, \
+         patch("app.routers.webhook._get_line_display_name", new_callable=AsyncMock, return_value=None):
+        await _handle_otp_verification(db, LINE_UID, "000000", TOKEN)  # wrong — triggers lockout
+
+    ev = db.query(EmailVerification).filter(EmailVerification.email == EMAIL).first()
+    assert ev.failed_attempts == 5
+    assert "次數過多" in mock_reply.call_args[0][1]
+
+    # Subsequent attempt with the CORRECT code must also fail (record now excluded by filter)
+    with patch("app.routers.webhook._reply_text", new_callable=AsyncMock) as mock_reply2, \
+         patch("app.routers.webhook._get_line_display_name", new_callable=AsyncMock, return_value=None):
+        await _handle_otp_verification(db, LINE_UID, "123456", TOKEN)
+
+    assert "驗證碼無效" in mock_reply2.call_args[0][1]
 
 
 # ── _handle_query ─────────────────────────────────────────────────────────────
