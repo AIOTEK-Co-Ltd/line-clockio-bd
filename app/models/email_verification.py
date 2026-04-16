@@ -3,7 +3,7 @@ from __future__ import annotations
 import datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, String
+from sqlalchemy import Boolean, DateTime, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -16,9 +16,12 @@ class EmailVerification(Base):
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     line_user_id: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     email: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
-    otp_code: Mapped[str] = mapped_column(String(6), nullable=False)
+    # Stored as SHA-256 hex digest (salted with line_user_id) — never plaintext
+    otp_code: Mapped[str] = mapped_column(String(64), nullable=False)
     expires_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     used: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Brute-force lockout: increment on each wrong guess; lock at 5
+    failed_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     created_at: Mapped[Optional[datetime.datetime]] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
