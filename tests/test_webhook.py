@@ -243,13 +243,16 @@ async def test_query_summary_with_check_ins(db):
     db.commit()
     db.refresh(worker)
 
+    # Use UTC times that both fall on 2026-04-01 in Asia/Taipei (UTC+8):
+    #   01:00 UTC = 09:00 Asia/Taipei  (clock-in)
+    #   09:00 UTC = 17:00 Asia/Taipei  (clock-out)
     db.add(CheckIn(
         employee_id=worker.id,
         type=CheckInType.clock_in,
         latitude=25.033,
         longitude=121.565,
         ip_address="127.0.0.1",
-        checked_at=datetime(2026, 4, 1, 9, 0, tzinfo=timezone.utc),
+        checked_at=datetime(2026, 4, 1, 1, 0, tzinfo=timezone.utc),
     ))
     db.add(CheckIn(
         employee_id=worker.id,
@@ -257,7 +260,7 @@ async def test_query_summary_with_check_ins(db):
         latitude=25.033,
         longitude=121.565,
         ip_address="127.0.0.1",
-        checked_at=datetime(2026, 4, 1, 18, 0, tzinfo=timezone.utc),
+        checked_at=datetime(2026, 4, 1, 9, 0, tzinfo=timezone.utc),
     ))
     db.commit()
 
