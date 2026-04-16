@@ -87,6 +87,8 @@ async def _handle_email_submission(
         )
         return
 
+    # TODO (P1): add per-LINE-UID rate limiting to prevent Mailgun spam on unbound emails
+
     # Invalidate any pending (unused) OTPs for this LINE UID, then issue a new one
     otp = f"{secrets.randbelow(1_000_000):06d}"
     expires = datetime.now(timezone.utc) + timedelta(minutes=10)
@@ -139,6 +141,12 @@ async def _handle_otp_verification(
     # HR-initiated path: employee record already exists (email pre-loaded) but unbound
     employee = db.query(Employee).filter(Employee.email == verification.email).first()
     if employee:
+        # Guard against race: another LINE user may have bound this email between
+        # OTP issuance and verification (overwrite vulnerability fix)
+        if employee.line_user_id and employee.line_user_id != line_user_id:
+            db.commit()  # persist used=True so this OTP cannot be replayed
+            await _reply_text(reply_token, "此 Email 已被其他 LINE 帳號綁定，請聯繫管理員。")
+            return
         employee.line_user_id = line_user_id
     else:
         # Employee-initiated path: create new record now
@@ -176,9 +184,11 @@ async def _handle_query(
         await _reply_text(reply_token, "此功能僅限管理員使用。")
         return
 
-    # Parse YYYY-MM
+    # Parse YYYY-MM with basic sanity bounds
     try:
         year, month = map(int, month_str.split("-"))
+        if not (2000 <= year <= 2100 and 1 <= month <= 12):
+            raise ValueError("out of range")
         start = datetime(year, month, 1, tzinfo=timezone.utc)
         end = datetime(year + (month // 12), (month % 12) + 1, 1, tzinfo=timezone.utc)
     except (ValueError, AttributeError):
@@ -235,7 +245,7 @@ async def _handle_query(
 
 async def _reply_text(reply_token: str, text: str) -> None:
     settings = get_settings()
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=5.0) as client:
         await client.post(
             "https://api.line.me/v2/bot/message/reply",
             headers={"Authorization": f"Bearer {settings.line_channel_access_token}"},
@@ -245,7 +255,7 @@ async def _reply_text(reply_token: str, text: str) -> None:
 
 async def _get_line_display_name(line_user_id: str) -> str | None:
     settings = get_settings()
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=10.0) as client:
         resp = await client.get(
             f"https://api.line.me/v2/bot/profile/{line_user_id}",
             headers={"Authorization": f"Bearer {settings.line_channel_access_token}"},

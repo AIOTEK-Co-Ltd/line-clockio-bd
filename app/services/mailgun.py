@@ -13,7 +13,7 @@ async def send_otp_email(to_email: str, otp_code: str) -> bool:
     """Send a 6-digit OTP to *to_email* via Mailgun. Returns True on HTTP 200."""
     settings = get_settings()
     url, auth = _mailgun_post(settings)
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=10.0) as client:
         resp = await client.post(
             url,
             auth=auth,

@@ -3,7 +3,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -18,8 +18,8 @@ _LINE_VERIFY_URL = "https://api.line.me/oauth2/v2.1/verify"
 
 class CheckInRequest(BaseModel):
     type: str        # "clock_in" | "clock_out"
-    latitude: float
-    longitude: float
+    latitude: float  = Field(..., ge=-90, le=90)
+    longitude: float = Field(..., ge=-180, le=180)
     id_token: str    # LIFF ID token for identity verification
 
 
@@ -38,7 +38,7 @@ async def liff_checkin(
         raise HTTPException(status_code=400, detail="Invalid type. Must be 'clock_in' or 'clock_out'.")
 
     # Verify LIFF ID Token with LINE
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=10.0) as client:
         verify_resp = await client.post(
             _LINE_VERIFY_URL,
             data={"id_token": payload.id_token, "client_id": settings.liff_channel_id},

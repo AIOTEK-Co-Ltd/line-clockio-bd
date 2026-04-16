@@ -22,6 +22,7 @@ class Employee(Base):
     full_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     # LINE UID — NULL when HR pre-loads record before employee completes binding
     line_user_id: Mapped[Optional[str]] = mapped_column(String(50), unique=True, nullable=True, index=True)
+    # TODO (P1): enforce lowercase at DB layer via CHECK (email = LOWER(email))
     email: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     display_name: Mapped[Optional[str]] = mapped_column(String(100))  # LINE profile name (fallback)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

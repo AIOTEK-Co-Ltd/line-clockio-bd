@@ -33,6 +33,12 @@ def _require_manager(request: Request) -> bool:
     return bool(request.session.get("manager_id"))
 
 
+def _csv_safe(value: str | None) -> str:
+    """Prevent CSV formula injection for Excel (prefix dangerous leading chars with ')."""
+    s = "" if value is None else str(value)
+    return ("'" + s) if s and s[0] in ("=", "+", "-", "@", "\t", "\r") else s
+
+
 # ── Auth ──────────────────────────────────────────────────────────────────────
 
 @router.get("/login")
@@ -81,7 +87,7 @@ async def callback(
 
     settings = get_settings()
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=10.0) as client:
         token_resp = await client.post(
             _LINE_TOKEN_URL,
             data={
@@ -240,14 +246,14 @@ async def export_csv(
     for ci in check_ins:
         emp = ci.employee
         writer.writerow([
-            emp.employee_number or "",
-            emp.full_name or emp.display_name or "",
-            emp.email,
+            _csv_safe(emp.employee_number),
+            _csv_safe(emp.full_name or emp.display_name),
+            _csv_safe(emp.email),
             "上班打卡" if ci.type == CheckInType.clock_in else "下班打卡",
             ci.checked_at.astimezone(tz).strftime("%Y-%m-%d %H:%M:%S"),
             ci.latitude,
             ci.longitude,
-            ci.ip_address,
+            _csv_safe(ci.ip_address),
             exported_at,
         ])
 
@@ -317,6 +323,7 @@ async def hr_import(
 
     reader = csv.DictReader(io.StringIO(text))
     created = updated = errors = 0
+    to_invite: list[tuple[str, str]] = []  # (email, name) for new employees
 
     for row in reader:
         emp_no = (row.get("員工編號") or row.get("employee_number") or "").strip()
@@ -340,11 +347,13 @@ async def hr_import(
                 full_name=full_name or None,
                 email=email,
             ))
-            db.flush()
-            await send_invitation_email(email, full_name or email)
+            to_invite.append((email, full_name or email))
             created += 1
 
+    # Commit all DB changes first — then send emails so a rollback never orphans sent mail
     db.commit()
+    for inv_email, inv_name in to_invite:
+        await send_invitation_email(inv_email, inv_name)
     return RedirectResponse(
         f"/dashboard/employees?imported=1&created={created}&updated={updated}&errors={errors}",
         status_code=303,
