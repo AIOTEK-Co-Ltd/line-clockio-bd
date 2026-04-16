@@ -14,8 +14,8 @@ class Settings(BaseSettings):
     liff_channel_id: str
     liff_channel_secret: str
     database_url: str
-    resend_api_key: str
-    resend_from_email: str
+    mailgun_api_key: str
+    mailgun_from_email: str
     session_secret_key: str
     app_base_url: str
     timezone: str = "Asia/Taipei"
