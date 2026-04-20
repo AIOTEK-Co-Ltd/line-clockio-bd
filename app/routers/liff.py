@@ -21,8 +21,9 @@ async def liff_page(request: Request):
     """Serve the LIFF clock-in mini-app page."""
     settings = get_settings()
     return templates.TemplateResponse(
+        request,
         "liff/checkin.html",
-        {"request": request, "liff_id": settings.liff_id, "app_base_url": settings.app_base_url},
+        {"liff_id": settings.liff_id, "app_base_url": settings.app_base_url},
     )
 
 _LINE_VERIFY_URL = "https://api.line.me/oauth2/v2.1/verify"
