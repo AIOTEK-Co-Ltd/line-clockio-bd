@@ -3,6 +3,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -12,6 +13,17 @@ from app.models.check_in import CheckIn, CheckInType
 from app.models.employee import Employee
 
 router = APIRouter(tags=["liff"])
+templates = Jinja2Templates(directory="app/templates")
+
+
+@router.get("/liff/")
+async def liff_page(request: Request):
+    """Serve the LIFF clock-in mini-app page."""
+    settings = get_settings()
+    return templates.TemplateResponse(
+        "liff/checkin.html",
+        {"request": request, "liff_id": settings.liff_id, "app_base_url": settings.app_base_url},
+    )
 
 _LINE_VERIFY_URL = "https://api.line.me/oauth2/v2.1/verify"
 
