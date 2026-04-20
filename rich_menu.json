@@ -1,0 +1,37 @@
+{
+  "size": {
+    "width": 2500,
+    "height": 843
+  },
+  "selected": true,
+  "name": "打卡選單",
+  "chatBarText": "打卡",
+  "areas": [
+    {
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 1250,
+        "height": 843
+      },
+      "action": {
+        "type": "uri",
+        "label": "上班打卡",
+        "uri": "https://liff.line.me/YOUR_LIFF_ID"
+      }
+    },
+    {
+      "bounds": {
+        "x": 1250,
+        "y": 0,
+        "width": 1250,
+        "height": 843
+      },
+      "action": {
+        "type": "uri",
+        "label": "下班打卡",
+        "uri": "https://liff.line.me/YOUR_LIFF_ID"
+      }
+    }
+  ]
+}
