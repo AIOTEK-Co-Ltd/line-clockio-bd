@@ -20,7 +20,10 @@ if [ -z "$DB_PASSWORD" ]; then
   exit 1
 fi
 
-echo "==> [1/5] Creating Cloud SQL instance (PostgreSQL 15)..."
+echo "==> [1/5] Enabling Cloud SQL Admin API..."
+gcloud services enable sqladmin.googleapis.com --project="${PROJECT_ID}"
+
+echo "==> [2/5] Creating Cloud SQL instance (PostgreSQL 15)..."
 gcloud sql instances create "${INSTANCE}" \
   --project="${PROJECT_ID}" \
   --database-version=POSTGRES_15 \
@@ -33,19 +36,16 @@ gcloud sql instances create "${INSTANCE}" \
   --no-assign-ip \
   --enable-google-private-path
 
-echo "==> [2/5] Creating database..."
+echo "==> [3/5] Creating database..."
 gcloud sql databases create "${DB_NAME}" \
   --instance="${INSTANCE}" \
   --project="${PROJECT_ID}"
 
-echo "==> [3/5] Creating database user..."
+echo "==> [4/5] Creating database user..."
 gcloud sql users create "${DB_USER}" \
   --instance="${INSTANCE}" \
   --project="${PROJECT_ID}" \
   --password="${DB_PASSWORD}"
-
-echo "==> [4/5] Enabling Cloud SQL Admin API..."
-gcloud services enable sqladmin.googleapis.com --project="${PROJECT_ID}"
 
 echo "==> [5/5] Done. Add these to scripts/setup_secrets.sh:"
 echo ""

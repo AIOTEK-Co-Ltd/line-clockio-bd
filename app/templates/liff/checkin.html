@@ -178,9 +178,13 @@
   liff.init({ liffId: LIFF_ID })
     .then(() => {
       if (!liff.isLoggedIn()) { liff.login(); return; }
-      liff.getProfile().then(profile => {
-        document.getElementById("user-name").textContent = `👤 ${profile.displayName}`;
-      });
+      liff.getProfile()
+        .then(profile => {
+          document.getElementById("user-name").textContent = `👤 ${profile.displayName}`;
+        })
+        .catch(() => {
+          document.getElementById("user-name").textContent = "👤";
+        });
     })
     .catch(err => {
       document.getElementById("user-name").textContent = "LIFF 初始化失敗";
@@ -208,10 +212,8 @@
 
     document.getElementById("loading-msg").textContent = "正在送出打卡資料…";
 
-    let idToken;
-    try {
-      idToken = liff.getIDToken();
-    } catch (e) {
+    const idToken = liff.getIDToken();
+    if (!idToken) {
       showPanel("state-error");
       document.getElementById("error-msg").textContent = "身份驗證失敗，請重新開啟頁面。";
       return;
