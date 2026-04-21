@@ -95,10 +95,7 @@ def _build_checkin_query(
 async def login(request: Request, error: str | None = None):
     if _is_manager(request):
         return RedirectResponse("/dashboard/")
-    return templates.TemplateResponse(
-        "dashboard/login.html",
-        {"request": request, "error": error},
-    )
+    return templates.TemplateResponse(request, "dashboard/login.html", {"error": error})
 
 
 @router.get("/login/line")
@@ -220,9 +217,9 @@ async def dashboard_home(
     )
 
     return templates.TemplateResponse(
+        request,
         "dashboard/index.html",
         {
-            "request": request,
             "employees": all_employees,
             "check_ins": check_ins,
             "tz": tz,
@@ -315,9 +312,9 @@ async def employee_list(
         .all()
     )
     return templates.TemplateResponse(
+        request,
         "dashboard/employees.html",
         {
-            "request": request,
             "employees": employees,
             "csrf_token": _get_csrf_token(request),
             "import_result": {

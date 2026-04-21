@@ -4,18 +4,18 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     debug: bool = False
 
     line_channel_access_token: str
     line_channel_secret: str
-    liff_id: str
-    liff_channel_id: str
-    liff_channel_secret: str
+    liff_id: str = ""
+    liff_channel_id: str = ""
+    liff_channel_secret: str = ""
     database_url: str
-    mailgun_api_key: str
-    mailgun_from_email: str
+    mailgun_api_key: str = ""
+    mailgun_from_email: str = ""
     session_secret_key: str
     app_base_url: str
     timezone: str = "Asia/Taipei"
