@@ -152,8 +152,8 @@
 
 <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
 <script>
-  const LIFF_ID   = "{{ liff_id }}";
-  const API_URL   = "{{ app_base_url }}/liff/checkin";
+  const LIFF_ID   = {{ liff_id | tojson }};
+  const API_URL   = {{ app_base_url | tojson }} + "/liff/checkin";
 
   // ── Clock ──────────────────────────────────────────────────
   function updateClock() {

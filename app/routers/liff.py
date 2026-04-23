@@ -44,6 +44,9 @@ async def liff_checkin(
 ):
     settings = get_settings()
 
+    if not settings.liff_enabled:
+        raise HTTPException(status_code=503, detail="LIFF is not configured on this server.")
+
     # Validate check-in type
     try:
         checkin_type = CheckInType(payload.type)
