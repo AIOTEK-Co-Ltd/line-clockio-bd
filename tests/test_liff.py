@@ -2,6 +2,7 @@
 
 import pytest
 from pydantic import ValidationError
+from unittest.mock import patch
 
 from app.routers.liff import CheckInRequest
 
@@ -43,6 +44,25 @@ def test_liff_page_loads_liff_sdk(client):
     """LIFF SDK script tag is present."""
     resp = client.get("/liff/")
     assert "line-scdn.net/liff" in resp.text
+
+
+# ── POST /liff/checkin — liff_enabled guard ───────────────────────────────────
+
+def test_checkin_503_when_liff_not_configured(client):
+    """POST /liff/checkin returns 503 when LIFF credentials are not set."""
+    from app.config import Settings
+    from unittest.mock import MagicMock
+
+    disabled_settings = MagicMock(spec=Settings)
+    disabled_settings.liff_enabled = False
+
+    with patch("app.routers.liff.get_settings", return_value=disabled_settings):
+        resp = client.post(
+            "/liff/checkin",
+            json={"type": "clock_in", "latitude": 25.0, "longitude": 121.0, "id_token": "tok"},
+        )
+    assert resp.status_code == 503
+    assert "not configured" in resp.json()["detail"]
 
 
 # ── CheckInRequest field bounds ───────────────────────────────────────────────

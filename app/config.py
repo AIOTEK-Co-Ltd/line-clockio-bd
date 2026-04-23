@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     @property
     def liff_enabled(self) -> bool:
         return bool(self.liff_id and self.liff_channel_id and self.liff_channel_secret)
+
     database_url: str
     mailgun_api_key: str = ""
     mailgun_from_email: str = ""
