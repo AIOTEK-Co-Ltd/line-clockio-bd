@@ -28,17 +28,17 @@ class MakeupRequest(Base):
     employee_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("employees.id"), nullable=False, index=True
     )
-    # Reuse the existing checkintype PostgreSQL enum; create_type=False prevents
-    # SQLAlchemy from issuing a redundant CREATE TYPE in migrations.
+    # native_enum=False stores values as VARCHAR to avoid conflicts with existing
+    # PostgreSQL enum types. Values are validated by the Python enum at the app layer.
     type: Mapped[CheckInType] = mapped_column(
-        Enum(CheckInType, name="checkintype", create_type=False), nullable=False
+        Enum(CheckInType, native_enum=False), nullable=False
     )
     requested_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[MakeupRequestStatus] = mapped_column(
-        Enum(MakeupRequestStatus, name="makeuprequeststatus"),
+        Enum(MakeupRequestStatus, native_enum=False),
         nullable=False,
         server_default="pending",
     )
