@@ -1,12 +1,13 @@
 """Tests for app/routers/liff.py — page serving and Pydantic model validation."""
 
 import pytest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pydantic import ValidationError
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.models.check_in import CheckIn, CheckInType
 from app.models.employee import Employee
+from app.models.makeup_request import MakeupRequest, MakeupRequestStatus
 from app.routers.liff import CheckInRequest
 
 LINE_UID = "Uabc1234567890abcdef"
@@ -230,3 +231,227 @@ def test_records_403_for_unbound_user(db):
     with pytest.raises(HTTPException) as exc:
         _get_employee(db, "ghost_uid")
     assert exc.value.status_code == 403
+
+
+# ── POST /liff/status — is_manager field ──────────────────────────────────────
+
+def test_status_returns_is_manager_false_for_regular_employee(client, db):
+    """Status returns is_manager=False for a non-manager employee."""
+    _add_employee(db)
+    settings = _mock_settings_liff()
+
+    with patch("app.routers.liff.get_settings", return_value=settings), \
+         patch("app.routers.liff._verify_line_token", new_callable=AsyncMock, return_value=LINE_UID):
+        resp = client.post("/liff/status", json={"id_token": "tok"})
+
+    assert resp.status_code == 200
+    assert resp.json()["is_manager"] is False
+    assert resp.json()["pending_makeup_count"] == 0
+
+
+def test_status_returns_is_manager_true_and_pending_count(client, db):
+    """Status returns is_manager=True and correct pending_makeup_count for managers."""
+    emp = _add_employee(db)
+    emp.is_manager = True
+    db.commit()
+
+    # Add a pending makeup request
+    req = MakeupRequest(
+        employee_id=emp.id,
+        type=CheckInType.clock_in,
+        requested_at=datetime.now(timezone.utc) - timedelta(hours=3),
+        reason="忘記打卡",
+        status=MakeupRequestStatus.pending,
+    )
+    db.add(req)
+    db.commit()
+    db.refresh(req)  # anchors session connection before endpoint call
+
+    settings = _mock_settings_liff()
+
+    with patch("app.routers.liff.get_settings", return_value=settings), \
+         patch("app.routers.liff._verify_line_token", new_callable=AsyncMock, return_value=LINE_UID):
+        resp = client.post("/liff/status", json={"id_token": "tok"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["is_manager"] is True
+    assert body["pending_makeup_count"] == 1
+
+
+# ── POST /liff/makeup/request ─────────────────────────────────────────────────
+
+def test_makeup_request_success(client, db):
+    """Employee can submit a makeup punch request for a past time."""
+    _add_employee(db)
+    settings = _mock_settings_liff()
+    past_time = (datetime.now(timezone.utc) - timedelta(hours=5)).isoformat()
+
+    with patch("app.routers.liff.get_settings", return_value=settings), \
+         patch("app.routers.liff._verify_line_token", new_callable=AsyncMock, return_value=LINE_UID):
+        resp = client.post("/liff/makeup/request", json={
+            "id_token": "tok",
+            "type": "clock_in",
+            "requested_at": past_time,
+            "reason": "忘記打卡",
+        })
+
+    assert resp.status_code == 200
+    assert resp.json()["success"] is True
+    assert db.query(MakeupRequest).count() == 1
+
+
+def test_makeup_request_rejects_future_time(client, db):
+    """Makeup request for a future time is rejected with 400."""
+    _add_employee(db)
+    settings = _mock_settings_liff()
+    future_time = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
+
+    with patch("app.routers.liff.get_settings", return_value=settings), \
+         patch("app.routers.liff._verify_line_token", new_callable=AsyncMock, return_value=LINE_UID):
+        resp = client.post("/liff/makeup/request", json={
+            "id_token": "tok",
+            "type": "clock_in",
+            "requested_at": future_time,
+            "reason": "test",
+        })
+
+    assert resp.status_code == 400
+
+
+# ── POST /liff/makeup/pending ─────────────────────────────────────────────────
+
+def test_makeup_pending_requires_manager(client, db):
+    """Non-manager employees cannot access the pending list."""
+    _add_employee(db)
+    settings = _mock_settings_liff()
+
+    with patch("app.routers.liff.get_settings", return_value=settings), \
+         patch("app.routers.liff._verify_line_token", new_callable=AsyncMock, return_value=LINE_UID):
+        resp = client.post("/liff/makeup/pending", json={"id_token": "tok"})
+
+    assert resp.status_code == 403
+
+
+def test_makeup_pending_returns_pending_requests(client, db):
+    """Manager sees all pending makeup requests."""
+    emp = _add_employee(db)
+    emp.is_manager = True
+    db.commit()
+
+    req = MakeupRequest(
+        employee_id=emp.id,
+        type=CheckInType.clock_in,
+        requested_at=datetime.now(timezone.utc) - timedelta(hours=3),
+        reason="測試原因",
+        status=MakeupRequestStatus.pending,
+    )
+    db.add(req)
+    db.commit()
+    db.refresh(req)  # anchors session connection before endpoint call
+
+    settings = _mock_settings_liff()
+
+    with patch("app.routers.liff.get_settings", return_value=settings), \
+         patch("app.routers.liff._verify_line_token", new_callable=AsyncMock, return_value=LINE_UID):
+        resp = client.post("/liff/makeup/pending", json={"id_token": "tok"})
+
+    assert resp.status_code == 200
+    reqs = resp.json()["requests"]
+    assert len(reqs) == 1
+    assert reqs[0]["type"] == "clock_in"
+    assert reqs[0]["reason"] == "測試原因"
+
+
+# ── POST /liff/makeup/review ──────────────────────────────────────────────────
+
+def test_makeup_review_approve_creates_checkin(client, db):
+    """Approving a makeup request inserts a CheckIn record."""
+    emp = _add_employee(db)
+    emp.is_manager = True
+    db.commit()
+
+    req = MakeupRequest(
+        employee_id=emp.id,
+        type=CheckInType.clock_in,
+        requested_at=datetime.now(timezone.utc) - timedelta(hours=3),
+        reason="忘記打卡",
+        status=MakeupRequestStatus.pending,
+    )
+    db.add(req)
+    db.commit()
+    db.refresh(req)
+    req_id = req.id
+
+    settings = _mock_settings_liff()
+
+    with patch("app.routers.liff.get_settings", return_value=settings), \
+         patch("app.routers.liff._verify_line_token", new_callable=AsyncMock, return_value=LINE_UID):
+        resp = client.post("/liff/makeup/review", json={
+            "id_token": "tok",
+            "request_id": req_id,
+            "action": "approve",
+        })
+
+    assert resp.status_code == 200
+    assert resp.json()["success"] is True
+
+    db.expire_all()
+    updated = db.query(MakeupRequest).filter_by(id=req_id).first()
+    assert updated.status == MakeupRequestStatus.approved
+    assert updated.reviewed_by == emp.id
+
+    checkin = db.query(CheckIn).filter_by(employee_id=emp.id).first()
+    assert checkin is not None
+    assert checkin.ip_address == "makeup:approved"
+
+
+def test_makeup_review_reject_does_not_create_checkin(client, db):
+    """Rejecting a makeup request does not insert a CheckIn record."""
+    emp = _add_employee(db)
+    emp.is_manager = True
+    db.commit()
+
+    req = MakeupRequest(
+        employee_id=emp.id,
+        type=CheckInType.clock_out,
+        requested_at=datetime.now(timezone.utc) - timedelta(hours=1),
+        reason="忘記打卡",
+        status=MakeupRequestStatus.pending,
+    )
+    db.add(req)
+    db.commit()
+    db.refresh(req)
+    req_id = req.id
+
+    settings = _mock_settings_liff()
+
+    with patch("app.routers.liff.get_settings", return_value=settings), \
+         patch("app.routers.liff._verify_line_token", new_callable=AsyncMock, return_value=LINE_UID):
+        resp = client.post("/liff/makeup/review", json={
+            "id_token": "tok",
+            "request_id": req_id,
+            "action": "reject",
+        })
+
+    assert resp.status_code == 200
+    db.expire_all()
+    updated = db.query(MakeupRequest).filter_by(id=req_id).first()
+    assert updated.status == MakeupRequestStatus.rejected
+    assert db.query(CheckIn).count() == 0
+
+
+def test_makeup_review_requires_manager(client, db):
+    """Non-manager cannot review makeup requests."""
+    _add_employee(db)
+    settings = _mock_settings_liff()
+
+    with patch("app.routers.liff.get_settings", return_value=settings), \
+         patch("app.routers.liff._verify_line_token", new_callable=AsyncMock, return_value=LINE_UID):
+        resp = client.post("/liff/makeup/review", json={
+            "id_token": "tok",
+            "request_id": 1,
+            "action": "approve",
+        })
+
+    assert resp.status_code == 403

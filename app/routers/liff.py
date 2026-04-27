@@ -11,6 +11,7 @@ from app.config import get_settings
 from app.database import get_db
 from app.models.check_in import CheckIn, CheckInType
 from app.models.employee import Employee
+from app.models.makeup_request import MakeupRequest, MakeupRequestStatus
 
 router = APIRouter(tags=["liff"])
 templates = Jinja2Templates(directory="app/templates")
@@ -49,6 +50,13 @@ def _get_employee(db: Session, line_user_id: str) -> Employee:
     return employee
 
 
+def _get_manager(db: Session, line_user_id: str) -> Employee:
+    employee = _get_employee(db, line_user_id)
+    if not employee.is_manager:
+        raise HTTPException(status_code=403, detail="Manager access required.")
+    return employee
+
+
 def _today_start_utc(tz: ZoneInfo) -> datetime:
     return (
         datetime.now(tz)
@@ -70,6 +78,19 @@ class CheckInRequest(BaseModel):
     id_token: str
 
 
+class MakeupRequestCreate(BaseModel):
+    id_token: str
+    type: str
+    requested_at: datetime
+    reason: str = Field(..., min_length=1, max_length=500)
+
+
+class MakeupReviewPayload(BaseModel):
+    id_token: str
+    request_id: int
+    action: str  # "approve" or "reject"
+
+
 # ── Routes ─────────────────────────────────────────────────────────────────────
 
 @router.get("/liff/")
@@ -84,7 +105,7 @@ async def liff_page(request: Request):
 
 @router.post("/liff/status")
 async def liff_status(payload: TokenRequest, db: Session = Depends(get_db)):
-    """Return today's clock-in / clock-out times for the authenticated employee."""
+    """Return today's clock-in / clock-out times, display name, and manager flag."""
     settings = get_settings()
     line_user_id = await _verify_line_token(payload.id_token, settings.liff_channel_id)
     employee = _get_employee(db, line_user_id)
@@ -110,10 +131,20 @@ async def liff_status(payload: TokenRequest, db: Session = Depends(get_db)):
         elif r.type == CheckInType.clock_out:
             clock_out_time = t
 
+    pending_count = 0
+    if employee.is_manager:
+        pending_count = (
+            db.query(MakeupRequest)
+            .filter(MakeupRequest.status == MakeupRequestStatus.pending)
+            .count()
+        )
+
     return {
         "clock_in_time": clock_in_time,
         "clock_out_time": clock_out_time,
         "display_name": employee.display_name or employee.full_name or employee.email,
+        "is_manager": employee.is_manager,
+        "pending_makeup_count": pending_count,
     }
 
 
@@ -225,3 +256,122 @@ async def liff_checkin(
         "message": f"{type_label}成功：{time_str}",
         "time": time_str,
     }
+
+
+# ── Makeup punch endpoints ─────────────────────────────────────────────────────
+
+@router.post("/liff/makeup/request")
+async def liff_makeup_request(
+    payload: MakeupRequestCreate, db: Session = Depends(get_db)
+):
+    """Employee submits a makeup punch request."""
+    settings = get_settings()
+    line_user_id = await _verify_line_token(payload.id_token, settings.liff_channel_id)
+    employee = _get_employee(db, line_user_id)
+
+    try:
+        makeup_type = CheckInType(payload.type)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid type. Must be 'clock_in' or 'clock_out'.")
+
+    # Normalise to UTC
+    requested_utc = (
+        payload.requested_at.astimezone(timezone.utc)
+        if payload.requested_at.tzinfo
+        else payload.requested_at.replace(tzinfo=timezone.utc)
+    )
+    if requested_utc >= datetime.now(timezone.utc):
+        raise HTTPException(status_code=400, detail="補打卡時間不能是未來時間。")
+
+    req = MakeupRequest(
+        employee_id=employee.id,
+        type=makeup_type,
+        requested_at=requested_utc,
+        reason=payload.reason.strip(),
+        status=MakeupRequestStatus.pending,
+    )
+    db.add(req)
+    db.commit()
+
+    return {"success": True, "message": "補打卡申請已送出，請等候管理員審核。"}
+
+
+@router.post("/liff/makeup/pending")
+async def liff_makeup_pending(payload: TokenRequest, db: Session = Depends(get_db)):
+    """Manager: list all pending makeup punch requests."""
+    settings = get_settings()
+    line_user_id = await _verify_line_token(payload.id_token, settings.liff_channel_id)
+    manager = _get_manager(db, line_user_id)  # raises 403 if not manager
+
+    tz = ZoneInfo(settings.timezone)
+    requests = (
+        db.query(MakeupRequest)
+        .filter(MakeupRequest.status == MakeupRequestStatus.pending)
+        .order_by(MakeupRequest.created_at.asc())
+        .all()
+    )
+
+    return {
+        "requests": [
+            {
+                "id": r.id,
+                "employee_name": (
+                    r.employee.display_name or r.employee.full_name or r.employee.email
+                ),
+                "type": r.type.value,
+                "type_label": "上班" if r.type == CheckInType.clock_in else "下班",
+                "requested_at": r.requested_at.astimezone(tz).strftime("%m/%d %H:%M"),
+                "reason": r.reason,
+            }
+            for r in requests
+        ]
+    }
+
+
+@router.post("/liff/makeup/review")
+async def liff_makeup_review(
+    payload: MakeupReviewPayload, db: Session = Depends(get_db)
+):
+    """Manager: approve or reject a pending makeup punch request."""
+    settings = get_settings()
+    line_user_id = await _verify_line_token(payload.id_token, settings.liff_channel_id)
+    manager = _get_manager(db, line_user_id)
+
+    if payload.action not in ("approve", "reject"):
+        raise HTTPException(
+            status_code=400, detail="Action must be 'approve' or 'reject'."
+        )
+
+    req = (
+        db.query(MakeupRequest)
+        .filter(
+            MakeupRequest.id == payload.request_id,
+            MakeupRequest.status == MakeupRequestStatus.pending,
+        )
+        .first()
+    )
+    if not req:
+        raise HTTPException(status_code=404, detail="Pending request not found.")
+
+    req.reviewed_by = manager.id
+    req.reviewed_at = datetime.now(timezone.utc)
+
+    if payload.action == "approve":
+        req.status = MakeupRequestStatus.approved
+        # Insert the actual attendance record with the requested timestamp
+        check_in = CheckIn(
+            employee_id=req.employee_id,
+            type=req.type,
+            checked_at=req.requested_at,
+            latitude=0.0,
+            longitude=0.0,
+            ip_address="makeup:approved",
+        )
+        db.add(check_in)
+        msg = "已核准補打卡申請。"
+    else:
+        req.status = MakeupRequestStatus.rejected
+        msg = "已拒絕補打卡申請。"
+
+    db.commit()
+    return {"success": True, "message": msg}

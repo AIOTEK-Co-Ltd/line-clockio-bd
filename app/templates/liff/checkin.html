@@ -13,6 +13,7 @@
       --green-light: #e8f8e8;
       --orange: #ff6b35;
       --navy: #0f172a;
+      --amber: #d97706;
       --text: #1a1a2e;
       --sub: #6b7280;
       --bg: #f3f4f6;
@@ -55,7 +56,7 @@
     .screen { flex: 1; overflow-y: auto; padding: 16px; display: none; }
     .screen.active { display: block; }
 
-    /* ── Home screen ─────────────────────────────────────────── */
+    /* ── Home: datetime card ─────────────────────────────────── */
     .datetime-card {
       background: var(--navy);
       border-radius: var(--radius);
@@ -96,11 +97,12 @@
     .btn-in.done  { background: #d1fae5; color: #065f46; }
     .btn-out.done { background: #ffe4d6; color: #9a3412; }
 
-    /* ── Section title ───────────────────────────────────────── */
+    /* ── Section titles ──────────────────────────────────────── */
     .section-title {
       font-size: 15px; font-weight: 700; color: var(--sub);
       margin: 4px 0 10px; letter-spacing: 0.3px;
     }
+    .section-title.amber { color: var(--amber); margin-top: 16px; }
 
     /* ── Feature grid ────────────────────────────────────────── */
     .feature-grid {
@@ -122,6 +124,30 @@
     .feature-icon { font-size: 28px; margin-bottom: 8px; }
     .feature-label { font-size: 13px; font-weight: 600; color: var(--text); }
 
+    /* ── Manager section ─────────────────────────────────────── */
+    .manager-btn {
+      width: 100%;
+      background: #fff7ed;
+      border: 1.5px solid #fed7aa;
+      border-radius: var(--radius);
+      padding: 16px 18px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      transition: opacity .15s;
+    }
+    .manager-btn:active { opacity: .8; }
+    .manager-btn-left { display: flex; align-items: center; gap: 12px; }
+    .manager-btn-icon { font-size: 26px; }
+    .manager-btn-label { font-size: 16px; font-weight: 700; color: #92400e; }
+    .pending-badge {
+      background: #ef4444; color: #fff;
+      border-radius: 100px; padding: 3px 11px;
+      font-size: 13px; font-weight: 700;
+      display: none;
+    }
+
     /* ── Records screen ──────────────────────────────────────── */
     .month-title {
       font-size: 17px; font-weight: 700;
@@ -138,23 +164,94 @@
       box-shadow: 0 1px 3px rgba(0,0,0,.06);
     }
     .record-left { display: flex; align-items: center; gap: 12px; }
-    .record-dot {
-      width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
-    }
+    .record-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
     .dot-in  { background: var(--green); }
     .dot-out { background: var(--orange); }
     .record-date { font-size: 13px; color: var(--sub); }
     .record-type { font-size: 15px; font-weight: 600; }
     .record-time { font-size: 16px; font-weight: 700; color: var(--navy); }
-    .empty-state { text-align: center; color: var(--sub); padding: 40px 0; font-size: 15px; }
+
+    /* ── Makeup request form ─────────────────────────────────── */
+    .form-group { margin-bottom: 16px; }
+    .form-label {
+      display: block; font-size: 14px; font-weight: 600;
+      color: var(--sub); margin-bottom: 6px;
+    }
+    .form-input {
+      width: 100%; padding: 12px 14px;
+      border-radius: 12px; border: 1.5px solid #e5e7eb;
+      font-size: 16px; background: var(--card); color: var(--text);
+      outline: none; appearance: none;
+    }
+    .form-input:focus { border-color: var(--green); }
+    .form-textarea {
+      width: 100%; padding: 12px 14px;
+      border-radius: 12px; border: 1.5px solid #e5e7eb;
+      font-size: 15px; background: var(--card); color: var(--text);
+      height: 100px; resize: none; outline: none;
+    }
+    .form-textarea:focus { border-color: var(--green); }
+    .radio-row { display: flex; gap: 24px; }
+    .radio-row label {
+      font-size: 15px; font-weight: 500; color: var(--text);
+      display: flex; align-items: center; gap: 7px; cursor: pointer;
+    }
+    .submit-btn {
+      width: 100%; padding: 16px; border-radius: var(--radius);
+      background: var(--green); color: #fff;
+      font-size: 17px; font-weight: 700; border: none; cursor: pointer;
+      margin-top: 8px; transition: opacity .15s;
+    }
+    .submit-btn:active { opacity: .8; }
+
+    /* ── Manager review cards ────────────────────────────────── */
+    .review-card {
+      background: var(--card);
+      border-radius: var(--radius);
+      padding: 16px;
+      margin-bottom: 10px;
+      box-shadow: 0 1px 4px rgba(0,0,0,.06);
+    }
+    .review-header {
+      display: flex; align-items: center;
+      justify-content: space-between; margin-bottom: 8px;
+    }
+    .review-name { font-size: 16px; font-weight: 700; }
+    .type-badge {
+      padding: 3px 10px; border-radius: 100px;
+      font-size: 13px; font-weight: 600;
+    }
+    .badge-in  { background: #d1fae5; color: #065f46; }
+    .badge-out { background: #ffe4d6; color: #9a3412; }
+    .review-time { font-size: 14px; color: var(--sub); margin-bottom: 8px; }
+    .review-reason {
+      font-size: 14px; color: var(--text);
+      background: #f8fafc; border-radius: 8px;
+      padding: 8px 12px; margin-bottom: 12px;
+    }
+    .review-actions { display: flex; gap: 10px; }
+    .btn-approve, .btn-reject {
+      flex: 1; padding: 12px; border-radius: 12px;
+      font-size: 15px; font-weight: 700; border: none; cursor: pointer;
+      transition: opacity .15s;
+    }
+    .btn-approve { background: var(--green); color: #fff; }
+    .btn-reject  { background: #fee2e2; color: #dc2626; }
+    .btn-approve:active, .btn-reject:active { opacity: .8; }
+
+    /* ── Empty / loading state ───────────────────────────────── */
+    .empty-state {
+      text-align: center; color: var(--sub);
+      padding: 40px 0; font-size: 15px;
+    }
 
     /* ── Loading overlay ─────────────────────────────────────── */
     #loading-overlay {
       position: fixed; inset: 0;
       background: rgba(15,23,42,.7);
-      display: flex; flex-direction: column;
+      display: none; flex-direction: column;
       align-items: center; justify-content: center;
-      z-index: 100; display: none;
+      z-index: 100;
     }
     .spinner {
       width: 48px; height: 48px;
@@ -184,7 +281,7 @@
 
   <!-- Header -->
   <div class="header">
-    <button class="header-back" id="btn-back" onclick="showHome()">‹</button>
+    <button class="header-back" id="btn-back" onclick="goBack()">‹</button>
     <span class="header-title" id="header-title">Aiotek 打卡系統</span>
   </div>
 
@@ -214,13 +311,25 @@
         <div class="feature-icon">📅</div>
         <div class="feature-label">出勤紀錄</div>
       </button>
-      <button class="feature-item" onclick="showMakeup()">
+      <button class="feature-item" onclick="showMakeupForm()">
         <div class="feature-icon">📝</div>
         <div class="feature-label">補打卡</div>
       </button>
       <button class="feature-item" onclick="showLeave()">
         <div class="feature-icon">🌿</div>
         <div class="feature-label">請假</div>
+      </button>
+    </div>
+
+    <!-- Manager section (hidden until is_manager confirmed) -->
+    <div id="manager-section" style="display:none">
+      <div class="section-title amber">管理員專區</div>
+      <button class="manager-btn" onclick="showMakeupReview()">
+        <div class="manager-btn-left">
+          <div class="manager-btn-icon">🔍</div>
+          <div class="manager-btn-label">補打卡審核</div>
+        </div>
+        <div class="pending-badge" id="pending-badge">0</div>
       </button>
     </div>
 
@@ -232,10 +341,36 @@
     <div class="record-list" id="record-list"></div>
   </div>
 
-  <!-- ── Coming soon screens ──────────────────────────────── -->
-  <div class="screen" id="screen-makeup">
-    <div class="empty-state">📝<br><br>補打卡功能<br>即將推出</div>
+  <!-- ── Makeup request form (employee) ───────────────────── -->
+  <div class="screen" id="screen-makeup-form">
+    <div class="form-group">
+      <label class="form-label">日期</label>
+      <input class="form-input" type="date" id="makeup-date">
+    </div>
+    <div class="form-group">
+      <label class="form-label">時間</label>
+      <input class="form-input" type="time" id="makeup-time">
+    </div>
+    <div class="form-group">
+      <label class="form-label">類型</label>
+      <div class="radio-row">
+        <label><input type="radio" name="makeup-type" value="clock_in" checked> 上班打卡</label>
+        <label><input type="radio" name="makeup-type" value="clock_out"> 下班打卡</label>
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">原因 <span style="color:var(--sub);font-weight:400">(最多 500 字)</span></label>
+      <textarea class="form-textarea" id="makeup-reason" placeholder="請說明補打卡原因…" maxlength="500"></textarea>
+    </div>
+    <button class="submit-btn" onclick="submitMakeupRequest()">送出申請</button>
   </div>
+
+  <!-- ── Manager review screen ────────────────────────────── -->
+  <div class="screen" id="screen-makeup-review">
+    <div id="review-list"></div>
+  </div>
+
+  <!-- ── Coming soon: leave ───────────────────────────────── -->
   <div class="screen" id="screen-leave">
     <div class="empty-state">🌿<br><br>請假功能<br>即將推出</div>
   </div>
@@ -256,7 +391,9 @@
   const LIFF_ID  = {{ liff_id | tojson }};
   const API_BASE = {{ app_base_url | tojson }};
 
-  let idToken = null;
+  let idToken   = null;
+  let isManager = false;
+  let _prevScreen = "screen-home";
 
   // ── Clock ──────────────────────────────────────────────────
   const DAYS = ["日","一","二","三","四","五","六"];
@@ -273,15 +410,20 @@
 
   // ── Navigation ─────────────────────────────────────────────
   function showScreen(id, title, showBack) {
+    _prevScreen = document.querySelector(".screen.active")?.id || "screen-home";
     document.querySelectorAll(".screen").forEach(s => s.classList.remove("active"));
     document.getElementById(id).classList.add("active");
     document.getElementById("header-title").textContent = title;
     document.getElementById("btn-back").style.display = showBack ? "block" : "none";
   }
-  function showHome()    { showScreen("screen-home",    "Aiotek 打卡系統", false); }
-  function showMakeup()  { showScreen("screen-makeup",  "補打卡",           true); }
-  function showLeave()   { showScreen("screen-leave",   "請假",             true); }
+  function goBack() {
+    const target = _prevScreen === "screen-home" ? "screen-home" : "screen-home";
+    showScreen("screen-home", "Aiotek 打卡系統", false);
+  }
+  function showHome() { showScreen("screen-home", "Aiotek 打卡系統", false); }
+  function showLeave() { showScreen("screen-leave", "請假", true); }
 
+  // ── Records ────────────────────────────────────────────────
   async function showRecords() {
     showScreen("screen-records", "出勤紀錄", true);
     document.getElementById("record-list").innerHTML =
@@ -305,9 +447,107 @@
           </div>
           <div class="record-time">${r.time.split(" ")[1]}</div>
         </div>`).join("");
-    } catch (e) {
+    } catch {
       document.getElementById("record-list").innerHTML =
         '<div class="empty-state">載入失敗，請重試</div>';
+    }
+  }
+
+  // ── Makeup form (employee) ─────────────────────────────────
+  function showMakeupForm() {
+    const today = new Date().toISOString().split("T")[0];
+    document.getElementById("makeup-date").max   = today;
+    document.getElementById("makeup-date").value = today;
+    document.getElementById("makeup-time").value = "";
+    document.getElementById("makeup-reason").value = "";
+    document.querySelector('input[name="makeup-type"][value="clock_in"]').checked = true;
+    showScreen("screen-makeup-form", "補打卡申請", true);
+  }
+
+  async function submitMakeupRequest() {
+    const date   = document.getElementById("makeup-date").value;
+    const time   = document.getElementById("makeup-time").value;
+    const type   = document.querySelector('input[name="makeup-type"]:checked').value;
+    const reason = document.getElementById("makeup-reason").value.trim();
+
+    if (!date || !time) { toast("⚠️ 請填寫日期和時間"); return; }
+    if (!reason)        { toast("⚠️ 請填寫補打卡原因"); return; }
+
+    const dt = new Date(`${date}T${time}:00`);
+    if (dt > new Date()) { toast("⚠️ 補打卡時間不能是未來時間"); return; }
+
+    setLoading(true, "正在送出申請…");
+    try {
+      await apiPost("/liff/makeup/request", {
+        id_token: idToken,
+        type,
+        requested_at: dt.toISOString(),
+        reason,
+      });
+      setLoading(false);
+      toast("✅ 申請已送出，等候管理員審核");
+      showHome();
+    } catch (e) {
+      setLoading(false);
+      toast(e.detail || "❌ 送出失敗，請重試", 3500);
+    }
+  }
+
+  // ── Manager review ─────────────────────────────────────────
+  async function showMakeupReview() {
+    showScreen("screen-makeup-review", "補打卡審核", true);
+    document.getElementById("review-list").innerHTML =
+      '<div class="empty-state">載入中…</div>';
+    try {
+      const data = await apiPost("/liff/makeup/pending", { id_token: idToken });
+      const list = document.getElementById("review-list");
+      if (!data.requests.length) {
+        list.innerHTML = '<div class="empty-state">✅ 目前沒有待審核的申請</div>';
+        return;
+      }
+      list.innerHTML = data.requests.map(r => `
+        <div class="review-card" id="review-card-${r.id}">
+          <div class="review-header">
+            <span class="review-name">${r.employee_name}</span>
+            <span class="type-badge ${r.type === "clock_in" ? "badge-in" : "badge-out"}">${r.type_label}打卡</span>
+          </div>
+          <div class="review-time">📅 ${r.requested_at}</div>
+          <div class="review-reason">💬 ${r.reason}</div>
+          <div class="review-actions">
+            <button class="btn-approve" onclick="reviewRequest(${r.id},'approve')">✓ 核准</button>
+            <button class="btn-reject"  onclick="reviewRequest(${r.id},'reject')">✕ 拒絕</button>
+          </div>
+        </div>`).join("");
+    } catch {
+      document.getElementById("review-list").innerHTML =
+        '<div class="empty-state">載入失敗，請重試</div>';
+    }
+  }
+
+  async function reviewRequest(id, action) {
+    setLoading(true, action === "approve" ? "正在核准…" : "正在拒絕…");
+    try {
+      const data = await apiPost("/liff/makeup/review", {
+        id_token: idToken,
+        request_id: id,
+        action,
+      });
+      setLoading(false);
+      // Remove the reviewed card
+      document.getElementById(`review-card-${id}`)?.remove();
+      toast(`✅ ${data.message}`);
+      if (!document.querySelector(".review-card")) {
+        document.getElementById("review-list").innerHTML =
+          '<div class="empty-state">✅ 目前沒有待審核的申請</div>';
+      }
+      // Decrement badge
+      const badge = document.getElementById("pending-badge");
+      const n = parseInt(badge.textContent || "0") - 1;
+      if (n <= 0) { badge.style.display = "none"; }
+      else        { badge.textContent = n; }
+    } catch (e) {
+      setLoading(false);
+      toast(e.detail || "❌ 操作失敗，請重試", 3500);
     }
   }
 
@@ -338,20 +578,30 @@
     if (msg) document.getElementById("loading-msg").textContent = msg;
   }
 
-  // ── Status update ──────────────────────────────────────────
+  // ── Status refresh ─────────────────────────────────────────
   async function refreshStatus() {
     try {
       const data = await apiPost("/liff/status", { id_token: idToken });
       document.getElementById("dt-user").textContent = `👤 ${data.display_name}`;
-      const btnIn  = document.getElementById("btn-in");
-      const btnOut = document.getElementById("btn-out");
+
       if (data.clock_in_time) {
         document.getElementById("in-time").textContent = data.clock_in_time;
-        btnIn.classList.add("done");
+        document.getElementById("btn-in").classList.add("done");
       }
       if (data.clock_out_time) {
         document.getElementById("out-time").textContent = data.clock_out_time;
-        btnOut.classList.add("done");
+        document.getElementById("btn-out").classList.add("done");
+      }
+
+      isManager = !!data.is_manager;
+      if (isManager) {
+        document.getElementById("manager-section").style.display = "block";
+        const count = data.pending_makeup_count || 0;
+        const badge = document.getElementById("pending-badge");
+        if (count > 0) {
+          badge.textContent = count;
+          badge.style.display = "inline-block";
+        }
       }
     } catch { /* silent — user sees nothing different */ }
   }
@@ -380,7 +630,6 @@
         id_token:  idToken,
       });
       setLoading(false);
-      // Update button state
       if (type === "clock_in") {
         document.getElementById("in-time").textContent = data.time;
         document.getElementById("btn-in").classList.add("done");
