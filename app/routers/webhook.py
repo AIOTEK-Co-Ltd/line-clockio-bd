@@ -23,7 +23,7 @@ from app.services.mailgun import send_otp_email
 router = APIRouter(tags=["webhook"])
 logger = logging.getLogger(__name__)
 
-_EMAIL_RE = re.compile(r"^[\w.+-]+@[\w-]+\.[a-zA-Z]{2,}$")
+_EMAIL_RE = re.compile(r"^[\w.+-]+@([\w-]+\.)+[a-zA-Z]{2,}$")
 _OTP_RE = re.compile(r"^\d{6}$")
 _MAX_OTP_ATTEMPTS = 5
 
