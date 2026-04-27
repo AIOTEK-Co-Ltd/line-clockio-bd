@@ -133,7 +133,10 @@ async def _handle_email_submission(
         )
         return
 
-    if not get_settings().mailgun_enabled:
+    settings = get_settings()
+    debug_mode = settings.debug and not settings.mailgun_enabled
+
+    if not settings.mailgun_enabled and not settings.debug:
         await _reply_text(reply_token, "Email 服務尚未設定，請聯繫管理員。")
         return
 
@@ -155,6 +158,14 @@ async def _handle_email_submission(
         expires_at=expires,
     ))
     db.commit()
+
+    if debug_mode:
+        # DEBUG only — never use in production (exposes OTP in plaintext)
+        await _reply_text(
+            reply_token,
+            f"[DEBUG] Mailgun 未設定，驗證碼直接顯示：\n\n{otp}\n\n請在 10 分鐘內回傳此 6 位數驗證碼。",
+        )
+        return
 
     sent = await send_otp_email(email, otp)
     if sent:
