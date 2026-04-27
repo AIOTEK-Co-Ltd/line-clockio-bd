@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     database_url: str
     mailgun_api_key: str = ""
     mailgun_from_email: str = ""
+
+    @property
+    def mailgun_enabled(self) -> bool:
+        return bool(self.mailgun_api_key and self.mailgun_from_email and "@" in self.mailgun_from_email)
     session_secret_key: str
     app_base_url: str
     timezone: str = "Asia/Taipei"

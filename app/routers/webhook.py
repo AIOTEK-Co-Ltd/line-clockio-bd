@@ -133,6 +133,10 @@ async def _handle_email_submission(
         )
         return
 
+    if not get_settings().mailgun_enabled:
+        await _reply_text(reply_token, "Email 服務尚未設定，請聯繫管理員。")
+        return
+
     # TODO (P1): add per-LINE-UID rate limiting to prevent Mailgun spam on unbound emails
 
     # Invalidate any pending (unused) OTPs for this LINE UID, then issue a new one
