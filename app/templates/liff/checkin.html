@@ -29,53 +29,26 @@
       text-align: center;
     }
 
-    .logo {
-      font-size: 40px;
-      margin-bottom: 8px;
-    }
+    .logo { font-size: 40px; margin-bottom: 8px; }
 
-    h1 {
-      font-size: 20px;
-      font-weight: 700;
-      margin-bottom: 4px;
-    }
+    h1 { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
 
-    .subtitle {
-      font-size: 13px;
-      color: #888;
-      margin-bottom: 28px;
-    }
+    .subtitle { font-size: 13px; color: #888; margin-bottom: 28px; }
 
     .time {
-      font-size: 36px;
-      font-weight: 700;
-      letter-spacing: 2px;
-      margin-bottom: 6px;
-      color: #1a1a2e;
+      font-size: 36px; font-weight: 700; letter-spacing: 2px;
+      margin-bottom: 6px; color: #1a1a2e;
     }
-
-    .date {
-      font-size: 13px;
-      color: #888;
-      margin-bottom: 28px;
-    }
+    .date { font-size: 13px; color: #888; margin-bottom: 28px; }
 
     .btn {
-      display: block;
-      width: 100%;
-      padding: 18px;
-      border: none;
-      border-radius: 14px;
-      font-size: 18px;
-      font-weight: 700;
-      cursor: pointer;
-      transition: opacity 0.15s, transform 0.1s;
-      margin-bottom: 12px;
-      letter-spacing: 1px;
+      display: block; width: 100%; padding: 18px; border: none;
+      border-radius: 14px; font-size: 18px; font-weight: 700;
+      cursor: pointer; transition: opacity 0.15s, transform 0.1s;
+      margin-bottom: 12px; letter-spacing: 1px;
     }
-    .btn:active { opacity: 0.8; transform: scale(0.98); }
+    .btn:active  { opacity: 0.8; transform: scale(0.98); }
     .btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
-
     .btn-in  { background: #00b900; color: #fff; }
     .btn-out { background: #ff6b35; color: #fff; }
 
@@ -84,47 +57,37 @@
 
     .spinner {
       width: 44px; height: 44px;
-      border: 4px solid #e0e0e0;
-      border-top-color: #00b900;
+      border: 4px solid #e0e0e0; border-top-color: #00b900;
       border-radius: 50%;
       animation: spin 0.8s linear infinite;
       margin: 0 auto 16px;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    .result-icon { font-size: 52px; margin-bottom: 12px; }
-    .result-msg  { font-size: 22px; font-weight: 700; margin-bottom: 8px; }
-    .result-sub  { font-size: 14px; color: #666; margin-bottom: 24px; }
+    .result-icon  { font-size: 52px; margin-bottom: 12px; }
+    .result-type  { font-size: 18px; color: #666; margin-bottom: 6px; }
+    .result-time  { font-size: 52px; font-weight: 800; letter-spacing: 3px; margin-bottom: 8px; }
+    .result-sub   { font-size: 13px; color: #aaa; margin-bottom: 24px; }
+
+    .result-msg   { font-size: 22px; font-weight: 700; margin-bottom: 8px; }
+    .result-detail { font-size: 14px; color: #666; margin-bottom: 24px; }
 
     .btn-retry {
-      background: #f0f4f8;
-      color: #1a1a2e;
-      border: none;
-      border-radius: 12px;
-      padding: 14px 32px;
-      font-size: 15px;
-      font-weight: 600;
-      cursor: pointer;
-    }
-
-    .user-info {
-      font-size: 13px;
-      color: #aaa;
-      margin-top: 20px;
+      background: #f0f4f8; color: #1a1a2e; border: none;
+      border-radius: 12px; padding: 14px 32px;
+      font-size: 15px; font-weight: 600; cursor: pointer;
     }
   </style>
 </head>
 <body>
 
-<!-- ── Main panel ─────────────────────────────────────────── -->
+<!-- ── Main panel (manual / fallback) ──────────────────────── -->
 <div class="card" id="state-main">
   <div class="logo">🕐</div>
   <h1>LINE 打卡系統</h1>
   <p class="subtitle" id="user-name">載入中…</p>
-
   <div class="time" id="clock">--:--</div>
   <div class="date" id="date-str">----/--/--</div>
-
   <button class="btn btn-in"  id="btn-in"  onclick="doCheckin('clock_in')">上班打卡</button>
   <button class="btn btn-out" id="btn-out" onclick="doCheckin('clock_out')">下班打卡</button>
 </div>
@@ -138,24 +101,29 @@
 <!-- ── Success panel ─────────────────────────────────────── -->
 <div class="card" id="state-success">
   <div class="result-icon">✅</div>
-  <div class="result-msg" id="success-msg">打卡成功</div>
-  <div class="result-sub" id="success-sub"></div>
+  <div class="result-type" id="success-type"></div>
+  <div class="result-time" id="success-time"></div>
+  <div class="result-sub">打卡已記錄</div>
 </div>
 
 <!-- ── Error panel ───────────────────────────────────────── -->
 <div class="card" id="state-error">
   <div class="result-icon">❌</div>
-  <div class="result-msg">打卡失敗</div>
-  <div class="result-sub" id="error-msg"></div>
+  <div class="result-msg" id="error-title">打卡失敗</div>
+  <div class="result-detail" id="error-msg"></div>
   <button class="btn-retry" onclick="showMain()">重試</button>
 </div>
 
 <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
 <script>
-  const LIFF_ID   = {{ liff_id | tojson }};
-  const API_URL   = {{ app_base_url | tojson }} + "/liff/checkin";
+  const LIFF_ID  = {{ liff_id | tojson }};
+  const API_URL  = {{ app_base_url | tojson }} + "/liff/checkin";
 
-  // ── Clock ──────────────────────────────────────────────────
+  // ── URL param: auto type ───────────────────────────────────
+  const urlParams = new URLSearchParams(window.location.search);
+  const AUTO_TYPE = urlParams.get("type"); // "clock_in" | "clock_out" | null
+
+  // ── Clock (shown in manual mode only) ─────────────────────
   function updateClock() {
     const now = new Date();
     document.getElementById("clock").textContent =
@@ -167,8 +135,9 @@
   setInterval(updateClock, 1000);
 
   // ── State helpers ──────────────────────────────────────────
+  const PANELS = ["state-main", "state-loading", "state-success", "state-error"];
   function showPanel(id) {
-    ["state-main","state-loading","state-success","state-error"].forEach(p => {
+    PANELS.forEach(p => {
       document.getElementById(p).style.display = p === id ? "block" : "none";
     });
   }
@@ -178,13 +147,15 @@
   liff.init({ liffId: LIFF_ID })
     .then(() => {
       if (!liff.isLoggedIn()) { liff.login(); return; }
+
       liff.getProfile()
-        .then(profile => {
-          document.getElementById("user-name").textContent = `👤 ${profile.displayName}`;
-        })
-        .catch(() => {
-          document.getElementById("user-name").textContent = "👤";
-        });
+        .then(p => { document.getElementById("user-name").textContent = `👤 ${p.displayName}`; })
+        .catch(() => {});
+
+      // Auto-trigger if type param present, else stay on main panel
+      if (AUTO_TYPE === "clock_in" || AUTO_TYPE === "clock_out") {
+        doCheckin(AUTO_TYPE);
+      }
     })
     .catch(err => {
       document.getElementById("user-name").textContent = "LIFF 初始化失敗";
@@ -203,8 +174,9 @@
           enableHighAccuracy: true, timeout: 10000, maximumAge: 0,
         })
       );
-    } catch (e) {
+    } catch {
       showPanel("state-error");
+      document.getElementById("error-title").textContent = "定位失敗";
       document.getElementById("error-msg").textContent =
         "無法取得位置資訊，請確認已開啟定位權限後重試。";
       return;
@@ -215,7 +187,8 @@
     const idToken = liff.getIDToken();
     if (!idToken) {
       showPanel("state-error");
-      document.getElementById("error-msg").textContent = "身份驗證失敗，請重新開啟頁面。";
+      document.getElementById("error-title").textContent = "身份驗證失敗";
+      document.getElementById("error-msg").textContent = "請重新開啟頁面。";
       return;
     }
 
@@ -235,21 +208,23 @@
 
       if (resp.ok) {
         showPanel("state-success");
-        document.getElementById("success-msg").textContent = data.message || "打卡成功";
-        document.getElementById("success-sub").textContent =
-          type === "clock_in" ? "上班打卡已記錄 ✓" : "下班打卡已記錄 ✓";
-      } else if (resp.status === 409) {
-        showPanel("state-error");
-        document.getElementById("error-msg").textContent = "您在 2 小時內已完成過相同打卡，請勿重複操作。";
-      } else if (resp.status === 403) {
-        showPanel("state-error");
-        document.getElementById("error-msg").textContent = "您的帳號尚未完成綁定，請先透過 LINE 訊息完成 Email 綁定。";
+        document.getElementById("success-type").textContent =
+          type === "clock_in" ? "上班打卡" : "下班打卡";
+        document.getElementById("success-time").textContent = data.time || "--:--";
       } else {
         showPanel("state-error");
-        document.getElementById("error-msg").textContent = data.detail || "發生未知錯誤，請重試。";
+        document.getElementById("error-title").textContent =
+          resp.status === 409 ? "重複打卡" :
+          resp.status === 403 ? "帳號未綁定" :
+          resp.status === 422 ? "無法打卡" : "打卡失敗";
+        document.getElementById("error-msg").textContent =
+          resp.status === 409 ? "您在 2 小時內已完成過相同打卡，請勿重複操作。" :
+          resp.status === 403 ? "您的帳號尚未完成綁定，請先透過 LINE 訊息完成 Email 綁定。" :
+          data.detail || "發生未知錯誤，請重試。";
       }
-    } catch (e) {
+    } catch {
       showPanel("state-error");
+      document.getElementById("error-title").textContent = "網路錯誤";
       document.getElementById("error-msg").textContent = "網路連線失敗，請確認網路後重試。";
     }
   }

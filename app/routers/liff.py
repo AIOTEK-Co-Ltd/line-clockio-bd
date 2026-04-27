@@ -81,6 +81,29 @@ async def liff_checkin(
             detail="Employee not found or not active. Please complete account binding first.",
         )
 
+    # Clock-out requires a clock-in on the same calendar day (Asia/Taipei)
+    tz = ZoneInfo(settings.timezone)
+    if checkin_type == CheckInType.clock_out:
+        today_start = (
+            datetime.now(tz)
+            .replace(hour=0, minute=0, second=0, microsecond=0)
+            .astimezone(timezone.utc)
+        )
+        has_clock_in_today = (
+            db.query(CheckIn)
+            .filter(
+                CheckIn.employee_id == employee.id,
+                CheckIn.type == CheckInType.clock_in,
+                CheckIn.checked_at >= today_start,
+            )
+            .first()
+        )
+        if not has_clock_in_today:
+            raise HTTPException(
+                status_code=422,
+                detail="今日尚未上班打卡，請先完成上班打卡。",
+            )
+
     # Duplicate check-in prevention: same type within a 2-hour rolling window
     two_hours_ago = datetime.now(timezone.utc) - timedelta(hours=2)
     duplicate = (
@@ -119,7 +142,6 @@ async def liff_checkin(
     db.refresh(check_in)
 
     # Format local time for display
-    tz = ZoneInfo(settings.timezone)
     local_time = check_in.checked_at.astimezone(tz)
     time_str = local_time.strftime("%H:%M")
     type_label = "上班打卡" if checkin_type == CheckInType.clock_in else "下班打卡"
