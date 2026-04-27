@@ -57,14 +57,22 @@ async def webhook(
 
     for event in payload.get("events", []):
         try:
-            if event.get("type") != "message":
+            event_type = event.get("type")
+
+            if event_type == "follow":
+                line_user_id: str = event["source"]["userId"]
+                reply_token: str = event["replyToken"]
+                await _handle_follow(db, line_user_id, reply_token)
+                continue
+
+            if event_type != "message":
                 continue
             msg = event.get("message", {})
             if msg.get("type") != "text":
                 continue
 
-            line_user_id: str = event["source"]["userId"]
-            reply_token: str = event["replyToken"]
+            line_user_id = event["source"]["userId"]
+            reply_token = event["replyToken"]
             text: str = msg["text"].strip()
 
             if _EMAIL_RE.match(text):
@@ -80,6 +88,27 @@ async def webhook(
 
 
 # ── Binding flow ──────────────────────────────────────────────────────────────
+
+async def _handle_follow(db: Session, line_user_id: str, reply_token: str) -> None:
+    """Send onboarding instructions when an employee adds the bot as a friend."""
+    # If already bound, greet them instead of repeating the onboarding
+    if db.query(Employee).filter(
+        Employee.line_user_id == line_user_id,
+        Employee.is_active.is_(True),
+    ).first():
+        await _reply_text(reply_token, "歡迎回來！請使用下方選單進行打卡。")
+        return
+
+    await _reply_text(
+        reply_token,
+        "👋 歡迎使用 Aiotek 打卡系統！\n\n"
+        "請依照以下步驟完成帳號綁定：\n\n"
+        "1️⃣ 直接傳送您的公司 Email（例：name@aiotek.com.sg）\n"
+        "2️⃣ 系統將寄出 6 位數驗證碼至您的信箱\n"
+        "3️⃣ 在此回傳驗證碼即完成綁定\n\n"
+        "綁定完成後即可使用下方選單上下班打卡。",
+    )
+
 
 async def _handle_email_submission(
     db: Session, line_user_id: str, email: str, reply_token: str

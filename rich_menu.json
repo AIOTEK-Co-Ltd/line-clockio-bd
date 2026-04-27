@@ -17,7 +17,7 @@
       "action": {
         "type": "uri",
         "label": "上班打卡",
-        "uri": "https://liff.line.me/YOUR_LIFF_ID"
+        "uri": "https://liff.line.me/2009805508-fEwlAnqy"
       }
     },
     {
@@ -30,7 +30,7 @@
       "action": {
         "type": "uri",
         "label": "下班打卡",
-        "uri": "https://liff.line.me/YOUR_LIFF_ID"
+        "uri": "https://liff.line.me/2009805508-fEwlAnqy"
       }
     }
   ]

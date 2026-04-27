@@ -6,11 +6,14 @@ from base64 import b64encode
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from app.models.check_in import CheckIn, CheckInType
 from app.models.email_verification import EmailVerification
 from app.models.employee import Employee
 from app.routers.webhook import (
     _handle_email_submission,
+    _handle_follow,
     _handle_otp_verification,
     _handle_query,
     _hash_otp,
@@ -311,3 +314,32 @@ async def test_query_summary_with_check_ins(db):
     assert "出勤天數：1" in reply
     assert "上班：1" in reply
     assert "下班：1" in reply
+
+
+# ── _handle_follow ────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_follow_unbound_sends_onboarding(db):
+    """New employee (not yet bound) receives onboarding instructions."""
+    with patch("app.routers.webhook._reply_text", new_callable=AsyncMock) as mock_reply:
+        await _handle_follow(db, LINE_UID, TOKEN)
+
+    reply = mock_reply.call_args[0][1]
+    assert "歡迎" in reply
+    assert "Email" in reply or "email" in reply.lower()
+
+
+@pytest.mark.asyncio
+async def test_follow_already_bound_sends_welcome_back(db):
+    """Employee who is already bound and re-follows receives a welcome-back message."""
+    employee = Employee(line_user_id=LINE_UID, email=EMAIL, is_active=True)
+    db.add(employee)
+    db.commit()
+
+    with patch("app.routers.webhook._reply_text", new_callable=AsyncMock) as mock_reply:
+        await _handle_follow(db, LINE_UID, TOKEN)
+
+    reply = mock_reply.call_args[0][1]
+    assert "歡迎" in reply
+    # Should NOT re-show onboarding instructions
+    assert "驗證碼" not in reply
