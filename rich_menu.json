@@ -5,32 +5,19 @@
   },
   "selected": true,
   "name": "打卡選單",
-  "chatBarText": "打卡",
+  "chatBarText": "開啟打卡系統",
   "areas": [
     {
       "bounds": {
         "x": 0,
         "y": 0,
-        "width": 1250,
+        "width": 2500,
         "height": 843
       },
       "action": {
         "type": "uri",
-        "label": "上班打卡",
-        "uri": "https://liff.line.me/2009805508-fEwlAnqy?type=clock_in"
-      }
-    },
-    {
-      "bounds": {
-        "x": 1250,
-        "y": 0,
-        "width": 1250,
-        "height": 843
-      },
-      "action": {
-        "type": "uri",
-        "label": "下班打卡",
-        "uri": "https://liff.line.me/2009805508-fEwlAnqy?type=clock_out"
+        "label": "開啟打卡系統",
+        "uri": "https://liff.line.me/2009805508-fEwlAnqy"
       }
     }
   ]

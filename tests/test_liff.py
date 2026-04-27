@@ -1,10 +1,45 @@
 """Tests for app/routers/liff.py — page serving and Pydantic model validation."""
 
 import pytest
+from datetime import datetime, timezone
 from pydantic import ValidationError
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
+from app.models.check_in import CheckIn, CheckInType
+from app.models.employee import Employee
 from app.routers.liff import CheckInRequest
+
+LINE_UID = "Uabc1234567890abcdef"
+
+
+def _add_employee(db, display_name: str = "Alice") -> Employee:
+    emp = Employee(
+        email="alice@example.com",
+        line_user_id=LINE_UID,
+        display_name=display_name,
+        is_active=True,
+    )
+    db.add(emp)
+    db.commit()
+    db.refresh(emp)
+    return emp
+
+
+def _add_checkin(db, employee_id: int, ctype: CheckInType, checked_at: datetime) -> CheckIn:
+    ci = CheckIn(
+        employee_id=employee_id,
+        type=ctype,
+        latitude=25.0,
+        longitude=121.0,
+        ip_address="127.0.0.1",
+    )
+    db.add(ci)
+    db.flush()
+    # Override the server-default timestamp
+    ci.checked_at = checked_at
+    db.commit()
+    db.refresh(ci)
+    return ci
 
 
 # ── GET /liff/ page ───────────────────────────────────────────────────────────
@@ -95,3 +130,103 @@ def test_longitude_above_max_rejected():
 def test_longitude_below_min_rejected():
     with pytest.raises(ValidationError):
         CheckInRequest(type="clock_in", latitude=0.0, longitude=-180.001, id_token="tok")
+
+
+# ── POST /liff/status ─────────────────────────────────────────────────────────
+
+def _mock_settings_liff(tz: str = "Asia/Taipei") -> MagicMock:
+    s = MagicMock()
+    s.timezone = tz
+    s.liff_channel_id = "test-liff-channel-id"
+    s.liff_enabled = True
+    return s
+
+
+def test_status_returns_display_name(client, db):
+    """Status returns display_name when employee is bound."""
+    emp = _add_employee(db, display_name="Alice")
+    settings = _mock_settings_liff()
+
+    with patch("app.routers.liff.get_settings", return_value=settings), \
+         patch("app.routers.liff._verify_line_token", new_callable=AsyncMock, return_value=LINE_UID):
+        resp = client.post("/liff/status", json={"id_token": "tok"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["display_name"] == "Alice"
+    assert body["clock_in_time"] is None
+    assert body["clock_out_time"] is None
+
+
+def test_status_shows_todays_clock_in(client, db):
+    """Status returns today's clock-in time when a record exists."""
+    emp = _add_employee(db)
+    now_utc = datetime.now(timezone.utc).replace(hour=1, minute=0, second=0, microsecond=0)
+    _add_checkin(db, emp.id, CheckInType.clock_in, now_utc)
+    settings = _mock_settings_liff()
+
+    with patch("app.routers.liff.get_settings", return_value=settings), \
+         patch("app.routers.liff._verify_line_token", new_callable=AsyncMock, return_value=LINE_UID):
+        resp = client.post("/liff/status", json={"id_token": "tok"})
+
+    assert resp.status_code == 200
+    assert resp.json()["clock_in_time"] is not None
+
+
+def test_status_403_for_unbound_user(db):
+    """_get_employee raises 403 when LINE user has no active employee record."""
+    from fastapi import HTTPException
+    from app.routers.liff import _get_employee
+
+    with pytest.raises(HTTPException) as exc:
+        _get_employee(db, "nonexistent_uid")
+    assert exc.value.status_code == 403
+
+
+# ── POST /liff/records ────────────────────────────────────────────────────────
+
+def test_records_returns_month_label(client, db):
+    """Records endpoint returns a month label."""
+    _add_employee(db)
+    settings = _mock_settings_liff()
+
+    with patch("app.routers.liff.get_settings", return_value=settings), \
+         patch("app.routers.liff._verify_line_token", new_callable=AsyncMock, return_value=LINE_UID):
+        resp = client.post("/liff/records", json={"id_token": "tok"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "月" in body["month"]
+    assert isinstance(body["records"], list)
+
+
+def test_records_includes_checkin_entries(client, db):
+    """Records lists this month's check-in events with correct shape."""
+    emp = _add_employee(db)
+    now_utc = datetime.now(timezone.utc)
+    _add_checkin(db, emp.id, CheckInType.clock_in, now_utc)
+    settings = _mock_settings_liff()
+
+    with patch("app.routers.liff.get_settings", return_value=settings), \
+         patch("app.routers.liff._verify_line_token", new_callable=AsyncMock, return_value=LINE_UID):
+        resp = client.post("/liff/records", json={"id_token": "tok"})
+
+    assert resp.status_code == 200
+    records = resp.json()["records"]
+    assert len(records) == 1
+    r = records[0]
+    assert r["type"] == "clock_in"
+    assert r["type_label"] == "上班"
+    assert "date" in r
+    assert "weekday" in r
+    assert "time" in r
+
+
+def test_records_403_for_unbound_user(db):
+    """_get_employee raises 403 when LINE user has no active employee record (shared with status test)."""
+    from fastapi import HTTPException
+    from app.routers.liff import _get_employee
+
+    with pytest.raises(HTTPException) as exc:
+        _get_employee(db, "ghost_uid")
+    assert exc.value.status_code == 403
