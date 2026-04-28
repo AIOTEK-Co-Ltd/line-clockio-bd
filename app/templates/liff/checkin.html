@@ -395,6 +395,15 @@
   let isManager = false;
   let _prevScreen = "screen-home";
 
+  // ── XSS escape helper ─────────────────────────────────────
+  function esc(s) {
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
   // ── Clock ──────────────────────────────────────────────────
   const DAYS = ["日","一","二","三","四","五","六"];
   function updateClock() {
@@ -417,7 +426,6 @@
     document.getElementById("btn-back").style.display = showBack ? "block" : "none";
   }
   function goBack() {
-    const target = _prevScreen === "screen-home" ? "screen-home" : "screen-home";
     showScreen("screen-home", "Aiotek 打卡系統", false);
   }
   function showHome() { showScreen("screen-home", "Aiotek 打卡系統", false); }
@@ -508,11 +516,11 @@
       list.innerHTML = data.requests.map(r => `
         <div class="review-card" id="review-card-${r.id}">
           <div class="review-header">
-            <span class="review-name">${r.employee_name}</span>
-            <span class="type-badge ${r.type === "clock_in" ? "badge-in" : "badge-out"}">${r.type_label}打卡</span>
+            <span class="review-name">${esc(r.employee_name)}</span>
+            <span class="type-badge ${r.type === "clock_in" ? "badge-in" : "badge-out"}">${esc(r.type_label)}打卡</span>
           </div>
-          <div class="review-time">📅 ${r.requested_at}</div>
-          <div class="review-reason">💬 ${r.reason}</div>
+          <div class="review-time">📅 ${esc(r.requested_at)}</div>
+          <div class="review-reason">💬 ${esc(r.reason)}</div>
           <div class="review-actions">
             <button class="btn-approve" onclick="reviewRequest(${r.id},'approve')">✓ 核准</button>
             <button class="btn-reject"  onclick="reviewRequest(${r.id},'reject')">✕ 拒絕</button>

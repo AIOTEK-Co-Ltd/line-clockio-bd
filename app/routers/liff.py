@@ -5,7 +5,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.config import get_settings
 from app.database import get_db
@@ -306,6 +306,7 @@ async def liff_makeup_pending(payload: TokenRequest, db: Session = Depends(get_d
     tz = ZoneInfo(settings.timezone)
     requests = (
         db.query(MakeupRequest)
+        .options(joinedload(MakeupRequest.employee))
         .filter(MakeupRequest.status == MakeupRequestStatus.pending)
         .order_by(MakeupRequest.created_at.asc())
         .all()
