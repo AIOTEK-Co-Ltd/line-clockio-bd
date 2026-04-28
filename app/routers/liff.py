@@ -20,6 +20,14 @@ templates = Jinja2Templates(directory="app/templates")
 _LINE_VERIFY_URL = "https://api.line.me/oauth2/v2.1/verify"
 
 
+# ── Dependencies ──────────────────────────────────────────────────────────────
+
+def _require_liff() -> None:
+    """FastAPI dependency: raise 503 when LIFF credentials are not configured."""
+    if not get_settings().liff_enabled:
+        raise HTTPException(status_code=503, detail="LIFF is not configured on this server.")
+
+
 # ── Shared helpers ─────────────────────────────────────────────────────────────
 
 async def _verify_line_token(id_token: str, client_id: str) -> str:
@@ -105,7 +113,11 @@ async def liff_page(request: Request):
 
 
 @router.post("/liff/status")
-async def liff_status(payload: TokenRequest, db: Session = Depends(get_db)):
+async def liff_status(
+    payload: TokenRequest,
+    db: Session = Depends(get_db),
+    _: None = Depends(_require_liff),
+):
     """Return today's clock-in / clock-out times, display name, and manager flag."""
     settings = get_settings()
     line_user_id = await _verify_line_token(payload.id_token, settings.liff_channel_id)
@@ -150,7 +162,11 @@ async def liff_status(payload: TokenRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/liff/records")
-async def liff_records(payload: TokenRequest, db: Session = Depends(get_db)):
+async def liff_records(
+    payload: TokenRequest,
+    db: Session = Depends(get_db),
+    _: None = Depends(_require_liff),
+):
     """Return this month's attendance records for the authenticated employee."""
     settings = get_settings()
     line_user_id = await _verify_line_token(payload.id_token, settings.liff_channel_id)
@@ -191,11 +207,9 @@ async def liff_checkin(
     payload: CheckInRequest,
     request: Request,
     db: Session = Depends(get_db),
+    _: None = Depends(_require_liff),
 ):
     settings = get_settings()
-
-    if not settings.liff_enabled:
-        raise HTTPException(status_code=503, detail="LIFF is not configured on this server.")
 
     try:
         checkin_type = CheckInType(payload.type)
@@ -263,7 +277,9 @@ async def liff_checkin(
 
 @router.post("/liff/makeup/request")
 async def liff_makeup_request(
-    payload: MakeupRequestCreate, db: Session = Depends(get_db)
+    payload: MakeupRequestCreate,
+    db: Session = Depends(get_db),
+    _: None = Depends(_require_liff),
 ):
     """Employee submits a makeup punch request."""
     settings = get_settings()
@@ -275,12 +291,14 @@ async def liff_makeup_request(
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid type. Must be 'clock_in' or 'clock_out'.")
 
-    # Normalise to UTC
-    requested_utc = (
-        payload.requested_at.astimezone(timezone.utc)
-        if payload.requested_at.tzinfo
-        else payload.requested_at.replace(tzinfo=timezone.utc)
-    )
+    # Reject naive datetimes — treating them as UTC would cause an 8-hour error
+    # for clients in Asia/Taipei. Require explicit timezone info (e.g. +08:00 or Z).
+    if payload.requested_at.tzinfo is None:
+        raise HTTPException(
+            status_code=422,
+            detail="requested_at must include timezone info (e.g. 2026-04-28T09:00:00+08:00).",
+        )
+    requested_utc = payload.requested_at.astimezone(timezone.utc)
     if requested_utc >= datetime.now(timezone.utc):
         raise HTTPException(status_code=400, detail="補打卡時間不能是未來時間。")
 
@@ -312,7 +330,11 @@ async def liff_makeup_request(
 
 
 @router.post("/liff/makeup/pending")
-async def liff_makeup_pending(payload: TokenRequest, db: Session = Depends(get_db)):
+async def liff_makeup_pending(
+    payload: TokenRequest,
+    db: Session = Depends(get_db),
+    _: None = Depends(_require_liff),
+):
     """Manager: list all pending makeup punch requests."""
     settings = get_settings()
     line_user_id = await _verify_line_token(payload.id_token, settings.liff_channel_id)
@@ -346,7 +368,9 @@ async def liff_makeup_pending(payload: TokenRequest, db: Session = Depends(get_d
 
 @router.post("/liff/makeup/review")
 async def liff_makeup_review(
-    payload: MakeupReviewPayload, db: Session = Depends(get_db)
+    payload: MakeupReviewPayload,
+    db: Session = Depends(get_db),
+    _: None = Depends(_require_liff),
 ):
     """Manager: approve or reject a pending makeup punch request."""
     settings = get_settings()

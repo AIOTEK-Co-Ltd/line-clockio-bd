@@ -82,23 +82,38 @@ def test_liff_page_loads_liff_sdk(client):
     assert "line-scdn.net/liff" in resp.text
 
 
-# ── POST /liff/checkin — liff_enabled guard ───────────────────────────────────
+# ── POST /liff/* — liff_enabled guard (shared dependency) ────────────────────
+
+def _disabled_settings():
+    from app.config import Settings
+    s = MagicMock(spec=Settings)
+    s.liff_enabled = False
+    return s
+
 
 def test_checkin_503_when_liff_not_configured(client):
     """POST /liff/checkin returns 503 when LIFF credentials are not set."""
-    from app.config import Settings
-    from unittest.mock import MagicMock
-
-    disabled_settings = MagicMock(spec=Settings)
-    disabled_settings.liff_enabled = False
-
-    with patch("app.routers.liff.get_settings", return_value=disabled_settings):
+    with patch("app.routers.liff.get_settings", return_value=_disabled_settings()):
         resp = client.post(
             "/liff/checkin",
             json={"type": "clock_in", "latitude": 25.0, "longitude": 121.0, "id_token": "tok"},
         )
     assert resp.status_code == 503
     assert "not configured" in resp.json()["detail"]
+
+
+def test_status_503_when_liff_not_configured(client):
+    """POST /liff/status returns 503 when LIFF credentials are not set."""
+    with patch("app.routers.liff.get_settings", return_value=_disabled_settings()):
+        resp = client.post("/liff/status", json={"id_token": "tok"})
+    assert resp.status_code == 503
+
+
+def test_records_503_when_liff_not_configured(client):
+    """POST /liff/records returns 503 when LIFF credentials are not set."""
+    with patch("app.routers.liff.get_settings", return_value=_disabled_settings()):
+        resp = client.post("/liff/records", json={"id_token": "tok"})
+    assert resp.status_code == 503
 
 
 # ── CheckInRequest field bounds ───────────────────────────────────────────────
@@ -317,6 +332,26 @@ def test_makeup_request_rejects_future_time(client, db):
         })
 
     assert resp.status_code == 400
+
+
+def test_makeup_request_rejects_naive_datetime(client, db):
+    """Makeup request with a naive (timezone-unaware) requested_at is rejected with 422."""
+    _add_employee(db)
+    settings = _mock_settings_liff()
+    # Send a datetime string without any timezone offset
+    naive_time = "2026-04-01T09:00:00"
+
+    with patch("app.routers.liff.get_settings", return_value=settings), \
+         patch("app.routers.liff._verify_line_token", new_callable=AsyncMock, return_value=LINE_UID):
+        resp = client.post("/liff/makeup/request", json={
+            "id_token": "tok",
+            "type": "clock_in",
+            "requested_at": naive_time,
+            "reason": "test",
+        })
+
+    assert resp.status_code == 422
+    assert "timezone" in resp.json()["detail"].lower()
 
 
 def test_makeup_request_rejects_invalid_type(client, db):
