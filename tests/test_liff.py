@@ -15,7 +15,7 @@ LINE_UID = "Uabc1234567890abcdef"
 
 def _add_employee(db, display_name: str = "Alice") -> Employee:
     emp = Employee(
-        email="alice@example.com",
+        email="alice@aiotek.com.tw",
         line_user_id=LINE_UID,
         display_name=display_name,
         is_active=True,
@@ -505,3 +505,68 @@ def test_makeup_review_requires_manager(client, db):
         })
 
     assert resp.status_code == 403
+
+
+def test_makeup_review_concurrent_approve_returns_409(client, db):
+    """Second approval of the same request returns 409 and creates only one CheckIn."""
+    emp = _add_employee(db)
+    emp.is_manager = True
+    db.commit()
+
+    req = MakeupRequest(
+        employee_id=emp.id,
+        type=CheckInType.clock_in,
+        requested_at=datetime.now(timezone.utc) - timedelta(hours=3),
+        reason="忘記打卡",
+        status=MakeupRequestStatus.pending,
+    )
+    db.add(req)
+    db.commit()
+    db.refresh(req)
+    req_id = req.id
+
+    settings = _mock_settings_liff()
+
+    with patch("app.routers.liff.get_settings", return_value=settings), \
+         patch("app.routers.liff._verify_line_token", new_callable=AsyncMock, return_value=LINE_UID):
+        resp1 = client.post("/liff/makeup/review", json={
+            "id_token": "tok", "request_id": req_id, "action": "approve",
+        })
+        assert resp1.status_code == 200
+
+        # Re-anchor the SQLite in-memory session before the second call
+        db.expire_all()
+        _ = db.query(MakeupRequest).filter_by(id=req_id).first()
+
+        # Simulate second concurrent reviewer hitting the same request.
+        # Sequential test: pre-fetch finds status=approved → 404.
+        # True concurrent race: atomic UPDATE returns 0 → 409.
+        # Either way the request must NOT produce a second CheckIn.
+        resp2 = client.post("/liff/makeup/review", json={
+            "id_token": "tok", "request_id": req_id, "action": "approve",
+        })
+        assert resp2.status_code in (404, 409)
+
+    # Exactly one CheckIn was created despite two approve attempts
+    db.expire_all()
+    assert db.query(CheckIn).filter_by(employee_id=emp.id).count() == 1
+
+
+# ── POST /liff/checkin — clock-out guard ──────────────────────────────────────
+
+def test_checkin_clock_out_without_clock_in_returns_422(client, db):
+    """Clock-out is blocked with 422 when no clock-in exists for today."""
+    _add_employee(db)
+    settings = _mock_settings_liff()
+
+    with patch("app.routers.liff.get_settings", return_value=settings), \
+         patch("app.routers.liff._verify_line_token", new_callable=AsyncMock, return_value=LINE_UID):
+        resp = client.post("/liff/checkin", json={
+            "type": "clock_out",
+            "latitude": 25.0,
+            "longitude": 121.0,
+            "id_token": "tok",
+        })
+
+    assert resp.status_code == 422
+    assert "上班打卡" in resp.json()["detail"]

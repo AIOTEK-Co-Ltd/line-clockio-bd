@@ -5,6 +5,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from app.config import get_settings
@@ -301,7 +302,11 @@ async def liff_makeup_request(
         status=MakeupRequestStatus.pending,
     )
     db.add(req)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="相同時間的補打卡申請已存在，請等候審核。")
 
     return {"success": True, "message": "補打卡申請已送出，請等候管理員審核。"}
 
@@ -353,7 +358,8 @@ async def liff_makeup_review(
             status_code=400, detail="Action must be 'approve' or 'reject'."
         )
 
-    req = (
+    # Pre-fetch for CheckIn field values (needed before the atomic update clears pending status)
+    target = (
         db.query(MakeupRequest)
         .filter(
             MakeupRequest.id == payload.request_id,
@@ -361,29 +367,47 @@ async def liff_makeup_review(
         )
         .first()
     )
-    if not req:
+    if not target:
         raise HTTPException(status_code=404, detail="Pending request not found.")
 
-    req.reviewed_by = manager.id
-    req.reviewed_at = datetime.now(timezone.utc)
+    new_status = (
+        MakeupRequestStatus.approved if payload.action == "approve"
+        else MakeupRequestStatus.rejected
+    )
+    # Atomic UPDATE: the WHERE status='pending' guard means only one concurrent
+    # reviewer can win — the second will see updated=0 and receive 409.
+    updated = (
+        db.query(MakeupRequest)
+        .filter(
+            MakeupRequest.id == payload.request_id,
+            MakeupRequest.status == MakeupRequestStatus.pending,
+        )
+        .update(
+            {
+                "status": new_status,
+                "reviewed_by": manager.id,
+                "reviewed_at": datetime.now(timezone.utc),
+            },
+            synchronize_session=False,
+        )
+    )
+    if updated == 0:
+        raise HTTPException(status_code=409, detail="此申請已被其他管理員審核。")
 
     if payload.action == "approve":
-        req.status = MakeupRequestStatus.approved
         # Insert the attendance record at the employee's requested timestamp.
         # This intentionally bypasses the normal 2-hour duplicate guard — manager
         # approval is an explicit override, so the record is written as-is.
-        check_in = CheckIn(
-            employee_id=req.employee_id,
-            type=req.type,
-            checked_at=req.requested_at,
+        db.add(CheckIn(
+            employee_id=target.employee_id,
+            type=target.type,
+            checked_at=target.requested_at,
             latitude=0.0,
             longitude=0.0,
             ip_address="makeup:approved",
-        )
-        db.add(check_in)
+        ))
         msg = "已核准補打卡申請。"
     else:
-        req.status = MakeupRequestStatus.rejected
         msg = "已拒絕補打卡申請。"
 
     db.commit()

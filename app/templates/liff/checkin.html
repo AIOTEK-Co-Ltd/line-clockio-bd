@@ -484,6 +484,9 @@
     const dt = new Date(`${date}T${time}:00`);
     if (dt > new Date()) { toast("⚠️ 補打卡時間不能是未來時間"); return; }
 
+    const submitBtn = document.querySelector("#screen-makeup-form .submit-btn");
+    if (submitBtn.disabled) return;
+    submitBtn.disabled = true;
     setLoading(true, "正在送出申請…");
     try {
       await apiPost("/liff/makeup/request", {
@@ -493,10 +496,12 @@
         reason,
       });
       setLoading(false);
+      submitBtn.disabled = false;
       toast("✅ 申請已送出，等候管理員審核");
       showHome();
     } catch (e) {
       setLoading(false);
+      submitBtn.disabled = false;
       toast(e.detail || "❌ 送出失敗，請重試", 3500);
     }
   }
@@ -522,8 +527,8 @@
           <div class="review-time">📅 ${esc(r.requested_at)}</div>
           <div class="review-reason">💬 ${esc(r.reason)}</div>
           <div class="review-actions">
-            <button class="btn-approve" onclick="reviewRequest(${r.id},'approve')">✓ 核准</button>
-            <button class="btn-reject"  onclick="reviewRequest(${r.id},'reject')">✕ 拒絕</button>
+            <button class="btn-approve" onclick="reviewRequest(${r.id},'approve',this)">✓ 核准</button>
+            <button class="btn-reject"  onclick="reviewRequest(${r.id},'reject',this)">✕ 拒絕</button>
           </div>
         </div>`).join("");
     } catch {
@@ -532,7 +537,9 @@
     }
   }
 
-  async function reviewRequest(id, action) {
+  async function reviewRequest(id, action, btnEl) {
+    // Disable both action buttons immediately to prevent double-submit before overlay appears
+    if (btnEl) btnEl.parentElement.querySelectorAll("button").forEach(b => b.disabled = true);
     setLoading(true, action === "approve" ? "正在核准…" : "正在拒絕…");
     try {
       const data = await apiPost("/liff/makeup/review", {
@@ -611,7 +618,10 @@
           badge.style.display = "inline-block";
         }
       }
-    } catch { /* silent — user sees nothing different */ }
+    } catch (e) {
+      console.error("refreshStatus failed:", e);
+      toast("⚠️ 狀態載入失敗，請重新整理", 4000);
+    }
   }
 
   // ── Punch ──────────────────────────────────────────────────
