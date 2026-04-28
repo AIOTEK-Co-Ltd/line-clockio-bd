@@ -1,31 +1,31 @@
 #!/bin/bash
 # scripts/setup_secrets.sh — Store all app secrets in GCP Secret Manager
-# Usage: fill in the values below, then run: bash scripts/setup_secrets.sh
+# Usage:
+#   1. Copy scripts/.secrets.env.example to scripts/.secrets.env
+#   2. Fill in values in scripts/.secrets.env (it is gitignored)
+#   3. Run: bash scripts/setup_secrets.sh
 # Prerequisites: gcloud CLI authenticated with roles/secretmanager.admin
 
 set -euo pipefail
 
 PROJECT_ID="aiotek-bot"
 
-# ── Fill these in before running ──────────────────────────────
-LINE_CHANNEL_ACCESS_TOKEN=""
-LINE_CHANNEL_SECRET=""
-LIFF_ID=""
-LIFF_CHANNEL_ID=""
-LIFF_CHANNEL_SECRET=""
-DATABASE_URL=""        # postgresql+psycopg2://user:pass@/dbname?host=/cloudsql/aiotek-bot:asia-east1:INSTANCE
-MAILGUN_API_KEY=""
-MAILGUN_FROM_EMAIL=""
-SESSION_SECRET_KEY=""  # generate: openssl rand -hex 32
-APP_BASE_URL=""        # https://line-clockio-HASH-de.a.run.app  (fill after first deploy)
-# ─────────────────────────────────────────────────────────────
+SECRETS_FILE="$(dirname "$0")/.secrets.env"
+if [ ! -f "${SECRETS_FILE}" ]; then
+  echo "ERROR: ${SECRETS_FILE} not found."
+  echo "       Copy scripts/.secrets.env.example to scripts/.secrets.env and fill in values."
+  exit 1
+fi
+
+# shellcheck source=scripts/.secrets.env
+source "${SECRETS_FILE}"
 
 create_secret() {
   local name="$1"
-  local value="$2"
+  local value="${!name:-}"
 
   if [ -z "$value" ]; then
-    echo "  SKIP  ${name} (empty — fill in the script first)"
+    echo "  SKIP  ${name} (empty in .secrets.env)"
     return
   fi
 
@@ -41,16 +41,16 @@ create_secret() {
 }
 
 echo "==> Storing secrets in project: ${PROJECT_ID}"
-create_secret "LINE_CHANNEL_ACCESS_TOKEN" "${LINE_CHANNEL_ACCESS_TOKEN}"
-create_secret "LINE_CHANNEL_SECRET"       "${LINE_CHANNEL_SECRET}"
-create_secret "LIFF_ID"                   "${LIFF_ID}"
-create_secret "LIFF_CHANNEL_ID"           "${LIFF_CHANNEL_ID}"
-create_secret "LIFF_CHANNEL_SECRET"       "${LIFF_CHANNEL_SECRET}"
-create_secret "DATABASE_URL"              "${DATABASE_URL}"
-create_secret "MAILGUN_API_KEY"           "${MAILGUN_API_KEY}"
-create_secret "MAILGUN_FROM_EMAIL"        "${MAILGUN_FROM_EMAIL}"
-create_secret "SESSION_SECRET_KEY"        "${SESSION_SECRET_KEY}"
-create_secret "APP_BASE_URL"              "${APP_BASE_URL}"
+create_secret "LINE_CHANNEL_ACCESS_TOKEN"
+create_secret "LINE_CHANNEL_SECRET"
+create_secret "LIFF_ID"
+create_secret "LIFF_CHANNEL_ID"
+create_secret "LIFF_CHANNEL_SECRET"
+create_secret "DATABASE_URL"
+create_secret "MAILGUN_API_KEY"
+create_secret "MAILGUN_FROM_EMAIL"
+create_secret "SESSION_SECRET_KEY"
+create_secret "APP_BASE_URL"
 
 echo ""
 echo "==> Done. Grant Cloud Run access to these secrets:"

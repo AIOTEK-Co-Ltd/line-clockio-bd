@@ -10,8 +10,8 @@ REGION="asia-east1"
 SERVICE="line-clockio"
 IMAGE="gcr.io/${PROJECT_ID}/${SERVICE}"
 
-echo "==> Building Docker image..."
-docker build -t "${IMAGE}" .
+echo "==> Building Docker image (linux/amd64 for Cloud Run)..."
+docker build --platform linux/amd64 -t "${IMAGE}" .
 
 echo "==> Pushing to Google Container Registry..."
 docker push "${IMAGE}"
@@ -29,6 +29,7 @@ gcloud run deploy "${SERVICE}" \
   --cpu 1 \
   --timeout 60 \
   --add-cloudsql-instances "${PROJECT_ID}:${REGION}:line-clockio-db" \
+  --set-env-vars "DEBUG=${DEBUG:-false}" \
   --set-secrets "\
 LINE_CHANNEL_ACCESS_TOKEN=LINE_CHANNEL_ACCESS_TOKEN:latest,\
 LINE_CHANNEL_SECRET=LINE_CHANNEL_SECRET:latest,\
@@ -40,6 +41,13 @@ MAILGUN_API_KEY=MAILGUN_API_KEY:latest,\
 MAILGUN_FROM_EMAIL=MAILGUN_FROM_EMAIL:latest,\
 SESSION_SECRET_KEY=SESSION_SECRET_KEY:latest,\
 APP_BASE_URL=APP_BASE_URL:latest"
+
+echo "==> Setting public access policy..."
+gcloud beta run services add-iam-policy-binding "${SERVICE}" \
+  --region="${REGION}" \
+  --member="allUsers" \
+  --role="roles/run.invoker" \
+  --project="${PROJECT_ID}" || echo "  (IAM policy already set or requires org policy override)"
 
 echo ""
 echo "==> Deploy complete."

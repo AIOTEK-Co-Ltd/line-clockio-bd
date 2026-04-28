@@ -23,7 +23,8 @@ from app.services.mailgun import send_otp_email
 router = APIRouter(tags=["webhook"])
 logger = logging.getLogger(__name__)
 
-_EMAIL_RE = re.compile(r"^[\w.+-]+@[\w-]+\.[a-zA-Z]{2,}$")
+_EMAIL_RE = re.compile(r"^[\w.+-]+@([\w-]+\.)+[a-zA-Z]{2,}$")
+_ALLOWED_DOMAIN = "@aiotek.com.tw"
 _OTP_RE = re.compile(r"^\d{6}$")
 _MAX_OTP_ATTEMPTS = 5
 
@@ -57,14 +58,22 @@ async def webhook(
 
     for event in payload.get("events", []):
         try:
-            if event.get("type") != "message":
+            event_type = event.get("type")
+
+            if event_type == "follow":
+                line_user_id: str = event["source"]["userId"]
+                reply_token: str = event["replyToken"]
+                await _handle_follow(db, line_user_id, reply_token)
+                continue
+
+            if event_type != "message":
                 continue
             msg = event.get("message", {})
             if msg.get("type") != "text":
                 continue
 
-            line_user_id: str = event["source"]["userId"]
-            reply_token: str = event["replyToken"]
+            line_user_id = event["source"]["userId"]
+            reply_token = event["replyToken"]
             text: str = msg["text"].strip()
 
             if _EMAIL_RE.match(text):
@@ -81,6 +90,27 @@ async def webhook(
 
 # ── Binding flow ──────────────────────────────────────────────────────────────
 
+async def _handle_follow(db: Session, line_user_id: str, reply_token: str) -> None:
+    """Send onboarding instructions when an employee adds the bot as a friend."""
+    # If already bound, greet them instead of repeating the onboarding
+    if db.query(Employee).filter(
+        Employee.line_user_id == line_user_id,
+        Employee.is_active.is_(True),
+    ).first():
+        await _reply_text(reply_token, "歡迎回來！請使用下方選單進行打卡。")
+        return
+
+    await _reply_text(
+        reply_token,
+        "👋 歡迎使用 Aiotek 打卡系統！\n\n"
+        "請依照以下步驟完成帳號綁定：\n\n"
+        "1️⃣ 直接傳送您的公司 Email（例：name@aiotek.com.tw）\n"
+        "2️⃣ 系統將寄出 6 位數驗證碼至您的信箱\n"
+        "3️⃣ 在此回傳驗證碼即完成綁定\n\n"
+        "綁定完成後即可使用下方選單上下班打卡。",
+    )
+
+
 async def _handle_email_submission(
     db: Session, line_user_id: str, email: str, reply_token: str
 ) -> None:
@@ -90,6 +120,14 @@ async def _handle_email_submission(
         Employee.is_active.is_(True),
     ).first():
         await _reply_text(reply_token, "您的 LINE 帳號已完成綁定，無需重複操作。")
+        return
+
+    # Enforce company email domain
+    if not email.endswith(_ALLOWED_DOMAIN):
+        await _reply_text(
+            reply_token,
+            f"只接受公司 Email（{_ALLOWED_DOMAIN}），請確認後重新輸入。",
+        )
         return
 
     # Email already bound to a different LINE account?
@@ -102,6 +140,13 @@ async def _handle_email_submission(
             reply_token,
             f"此 Email（{email}）已被其他帳號綁定，請聯繫管理員。",
         )
+        return
+
+    settings = get_settings()
+    debug_mode = settings.debug and not settings.mailgun_enabled
+
+    if not settings.mailgun_enabled and not settings.debug:
+        await _reply_text(reply_token, "Email 服務尚未設定，請聯繫管理員。")
         return
 
     # TODO (P1): add per-LINE-UID rate limiting to prevent Mailgun spam on unbound emails
@@ -122,6 +167,14 @@ async def _handle_email_submission(
         expires_at=expires,
     ))
     db.commit()
+
+    if debug_mode:
+        # DEBUG only — never use in production (exposes OTP in plaintext)
+        await _reply_text(
+            reply_token,
+            f"[DEBUG] Mailgun 未設定，驗證碼直接顯示：\n\n{otp}\n\n請在 10 分鐘內回傳此 6 位數驗證碼。",
+        )
+        return
 
     sent = await send_otp_email(email, otp)
     if sent:
