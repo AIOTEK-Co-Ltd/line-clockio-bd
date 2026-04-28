@@ -283,6 +283,16 @@ async def liff_makeup_request(
     if requested_utc >= datetime.now(timezone.utc):
         raise HTTPException(status_code=400, detail="補打卡時間不能是未來時間。")
 
+    # Prevent duplicate pending requests for the same punch slot
+    duplicate_pending = db.query(MakeupRequest).filter(
+        MakeupRequest.employee_id == employee.id,
+        MakeupRequest.type == makeup_type,
+        MakeupRequest.requested_at == requested_utc,
+        MakeupRequest.status == MakeupRequestStatus.pending,
+    ).first()
+    if duplicate_pending:
+        raise HTTPException(status_code=409, detail="相同時間的補打卡申請已存在，請等候審核。")
+
     req = MakeupRequest(
         employee_id=employee.id,
         type=makeup_type,
@@ -301,7 +311,7 @@ async def liff_makeup_pending(payload: TokenRequest, db: Session = Depends(get_d
     """Manager: list all pending makeup punch requests."""
     settings = get_settings()
     line_user_id = await _verify_line_token(payload.id_token, settings.liff_channel_id)
-    manager = _get_manager(db, line_user_id)  # raises 403 if not manager
+    _get_manager(db, line_user_id)  # raises 403 if not manager
 
     tz = ZoneInfo(settings.timezone)
     requests = (
@@ -359,7 +369,9 @@ async def liff_makeup_review(
 
     if payload.action == "approve":
         req.status = MakeupRequestStatus.approved
-        # Insert the actual attendance record with the requested timestamp
+        # Insert the attendance record at the employee's requested timestamp.
+        # This intentionally bypasses the normal 2-hour duplicate guard — manager
+        # approval is an explicit override, so the record is written as-is.
         check_in = CheckIn(
             employee_id=req.employee_id,
             type=req.type,

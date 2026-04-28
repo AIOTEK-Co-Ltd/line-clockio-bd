@@ -24,6 +24,7 @@ router = APIRouter(tags=["webhook"])
 logger = logging.getLogger(__name__)
 
 _EMAIL_RE = re.compile(r"^[\w.+-]+@([\w-]+\.)+[a-zA-Z]{2,}$")
+_ALLOWED_DOMAIN = "@aiotek.com.tw"
 _OTP_RE = re.compile(r"^\d{6}$")
 _MAX_OTP_ATTEMPTS = 5
 
@@ -103,7 +104,7 @@ async def _handle_follow(db: Session, line_user_id: str, reply_token: str) -> No
         reply_token,
         "👋 歡迎使用 Aiotek 打卡系統！\n\n"
         "請依照以下步驟完成帳號綁定：\n\n"
-        "1️⃣ 直接傳送您的公司 Email（例：name@aiotek.com.sg）\n"
+        "1️⃣ 直接傳送您的公司 Email（例：name@aiotek.com.tw）\n"
         "2️⃣ 系統將寄出 6 位數驗證碼至您的信箱\n"
         "3️⃣ 在此回傳驗證碼即完成綁定\n\n"
         "綁定完成後即可使用下方選單上下班打卡。",
@@ -119,6 +120,14 @@ async def _handle_email_submission(
         Employee.is_active.is_(True),
     ).first():
         await _reply_text(reply_token, "您的 LINE 帳號已完成綁定，無需重複操作。")
+        return
+
+    # Enforce company email domain
+    if not email.endswith(_ALLOWED_DOMAIN):
+        await _reply_text(
+            reply_token,
+            f"只接受公司 Email（{_ALLOWED_DOMAIN}），請確認後重新輸入。",
+        )
         return
 
     # Email already bound to a different LINE account?

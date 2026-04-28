@@ -319,6 +319,56 @@ def test_makeup_request_rejects_future_time(client, db):
     assert resp.status_code == 400
 
 
+def test_makeup_request_rejects_invalid_type(client, db):
+    """Makeup request with an unrecognised type returns 400."""
+    _add_employee(db)
+    settings = _mock_settings_liff()
+    past_time = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+
+    with patch("app.routers.liff.get_settings", return_value=settings), \
+         patch("app.routers.liff._verify_line_token", new_callable=AsyncMock, return_value=LINE_UID):
+        resp = client.post("/liff/makeup/request", json={
+            "id_token": "tok",
+            "type": "invalid_type",
+            "requested_at": past_time,
+            "reason": "test",
+        })
+
+    assert resp.status_code == 400
+    assert "Invalid type" in resp.json()["detail"]
+
+
+def test_makeup_request_rejects_duplicate_pending(client, db):
+    """Second makeup request for the same slot while first is still pending returns 409."""
+    emp = _add_employee(db)
+    settings = _mock_settings_liff()
+    past_time = datetime.now(timezone.utc) - timedelta(hours=3)
+    past_time_iso = past_time.isoformat()
+
+    # Insert an existing pending request for the same slot
+    existing = MakeupRequest(
+        employee_id=emp.id,
+        type=CheckInType.clock_in,
+        requested_at=past_time,
+        reason="第一次申請",
+        status=MakeupRequestStatus.pending,
+    )
+    db.add(existing)
+    db.commit()
+    db.refresh(existing)
+
+    with patch("app.routers.liff.get_settings", return_value=settings), \
+         patch("app.routers.liff._verify_line_token", new_callable=AsyncMock, return_value=LINE_UID):
+        resp = client.post("/liff/makeup/request", json={
+            "id_token": "tok",
+            "type": "clock_in",
+            "requested_at": past_time_iso,
+            "reason": "重複申請",
+        })
+
+    assert resp.status_code == 409
+
+
 # ── POST /liff/makeup/pending ─────────────────────────────────────────────────
 
 def test_makeup_pending_requires_manager(client, db):

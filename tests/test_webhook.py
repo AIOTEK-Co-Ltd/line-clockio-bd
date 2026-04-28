@@ -21,7 +21,7 @@ from app.routers.webhook import (
 )
 
 LINE_UID = "Uabc1234567890abcdef"
-EMAIL = "alice@example.com"
+EMAIL = "alice@aiotek.com.tw"
 TOKEN = "reply-token"
 
 
@@ -115,6 +115,16 @@ async def test_email_submission_mailgun_failure(db):
         await _handle_email_submission(db, LINE_UID, EMAIL, TOKEN)
 
     assert "傳送失敗" in mock_reply.call_args[0][1]
+
+
+async def test_email_wrong_domain_rejected(db):
+    """Email with a non-company domain is rejected before any OTP is issued."""
+    with patch("app.routers.webhook._reply_text", new_callable=AsyncMock) as mock_reply, \
+         patch("app.routers.webhook.send_otp_email", new_callable=AsyncMock) as mock_send:
+        await _handle_email_submission(db, LINE_UID, "alice@gmail.com", TOKEN)
+
+    mock_send.assert_not_called()
+    assert "@aiotek.com.tw" in mock_reply.call_args[0][1]
 
 
 # ── _handle_otp_verification ──────────────────────────────────────────────────
