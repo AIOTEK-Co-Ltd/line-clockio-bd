@@ -170,6 +170,32 @@
     .record-date { font-size: 13px; color: var(--sub); }
     .record-type { font-size: 15px; font-weight: 600; }
     .record-time { font-size: 16px; font-weight: 700; color: var(--navy); }
+    .record-punch-row { display: flex; gap: 14px; margin-top: 6px; }
+    .record-punch { font-size: 14px; color: var(--sub); }
+    .record-punch span { font-weight: 700; color: var(--navy); }
+    .ot-tag {
+      display: inline-block; margin-top: 6px;
+      background: #fff7ed; color: #c2410c;
+      border: 1px solid #fed7aa;
+      border-radius: 100px; padding: 2px 10px;
+      font-size: 12px; font-weight: 600;
+    }
+    .ot-tag.legal-exceeded {
+      background: #fef2f2; color: #dc2626;
+      border-color: #fecaca;
+    }
+    .ot-monthly-banner {
+      background: var(--card);
+      border-radius: 12px;
+      padding: 12px 16px;
+      margin-bottom: 12px;
+      display: flex; align-items: center; justify-content: space-between;
+      box-shadow: 0 1px 3px rgba(0,0,0,.06);
+    }
+    .ot-monthly-label { font-size: 13px; color: var(--sub); font-weight: 500; }
+    .ot-monthly-value { font-size: 15px; font-weight: 700; color: var(--navy); }
+    .ot-monthly-banner.over-limit .ot-monthly-label { color: #dc2626; }
+    .ot-monthly-banner.over-limit .ot-monthly-value { color: #dc2626; }
 
     /* ── Makeup request form ─────────────────────────────────── */
     .form-group { margin-bottom: 16px; }
@@ -338,6 +364,10 @@
   <!-- ── Records screen ───────────────────────────────────── -->
   <div class="screen" id="screen-records">
     <div class="month-title" id="records-month"></div>
+    <div id="ot-monthly-banner" style="display:none" class="ot-monthly-banner">
+      <div class="ot-monthly-label">本月加班累計</div>
+      <div class="ot-monthly-value" id="ot-monthly-value">—</div>
+    </div>
     <div class="record-list" id="record-list"></div>
   </div>
 
@@ -432,29 +462,67 @@
   function showLeave() { showScreen("screen-leave", "請假", true); }
 
   // ── Records ────────────────────────────────────────────────
+  function fmtOt(minutes) {
+    if (minutes <= 0) return null;
+    const h = Math.floor(minutes / 60);
+    const m = minutes % 60;
+    return h > 0 ? (m > 0 ? `加班 ${h}h${m}m` : `加班 ${h}h`) : `加班 ${m}m`;
+  }
+
   async function showRecords() {
     showScreen("screen-records", "出勤紀錄", true);
     document.getElementById("record-list").innerHTML =
       '<div class="empty-state">載入中…</div>';
+    document.getElementById("ot-monthly-banner").style.display = "none";
     try {
       const data = await apiPost("/liff/records", { id_token: idToken });
       document.getElementById("records-month").textContent = data.month;
+
+      // Monthly OT banner
+      const banner = document.getElementById("ot-monthly-banner");
+      if (data.total_ot_counted_minutes > 0) {
+        const h = Math.floor(data.total_ot_counted_minutes / 60);
+        const m = data.total_ot_counted_minutes % 60;
+        const label = h > 0 ? (m > 0 ? `${h} 小時 ${m} 分` : `${h} 小時`) : `${m} 分`;
+        document.getElementById("ot-monthly-value").textContent = label;
+        banner.className = "ot-monthly-banner" + (data.exceeds_monthly_limit ? " over-limit" : "");
+        banner.querySelector(".ot-monthly-label").textContent =
+          data.exceeds_monthly_limit ? "⚠️ 已超過月加班上限（46 小時）" : "本月加班累計";
+        banner.style.display = "flex";
+      }
+
       const list = document.getElementById("record-list");
       if (!data.records.length) {
         list.innerHTML = '<div class="empty-state">本月尚無打卡紀錄</div>';
         return;
       }
-      list.innerHTML = data.records.map(r => `
-        <div class="record-item">
-          <div class="record-left">
-            <div class="record-dot ${r.type === "clock_in" ? "dot-in" : "dot-out"}"></div>
+
+      list.innerHTML = data.records.map(r => {
+        const otLabel = fmtOt(r.ot_counted_minutes);
+        const otHtml = r.exceeds_legal_limit
+          ? `<div><span class="ot-tag legal-exceeded">⚠️ 超過法定上限</span></div>`
+          : otLabel
+            ? `<div><span class="ot-tag">${esc(otLabel)}</span></div>`
+            : "";
+        const punchIn  = r.clock_in  ? `上班 <span>${esc(r.clock_in)}</span>`  : "上班 <span>—</span>";
+        const punchOut = r.in_progress
+          ? "下班 <span>上班中</span>"
+          : r.clock_out ? `下班 <span>${esc(r.clock_out)}</span>` : "下班 <span>—</span>";
+        return `
+        <div class="record-item" style="flex-direction:column;align-items:flex-start;">
+          <div style="display:flex;justify-content:space-between;width:100%;align-items:center;">
             <div>
-              <div class="record-date">${r.date} 星期${r.weekday}</div>
-              <div class="record-type">${r.type_label}打卡</div>
+              <div class="record-date">${esc(r.date)} 星期${esc(r.weekday)}</div>
             </div>
+            <div class="record-time">${r.work_minutes > 0 ? Math.floor(r.work_minutes/60) + "h" + (r.work_minutes%60 > 0 ? (r.work_minutes%60) + "m" : "") : (r.in_progress ? "上班中" : "—")}</div>
           </div>
-          <div class="record-time">${r.time.split(" ")[1]}</div>
-        </div>`).join("");
+          <div class="record-punch-row">
+            <div class="record-punch">${punchIn}</div>
+            <div class="record-punch">${punchOut}</div>
+          </div>
+          ${otHtml}
+        </div>`;
+      }).join("");
     } catch {
       document.getElementById("record-list").innerHTML =
         '<div class="empty-state">載入失敗，請重試</div>';

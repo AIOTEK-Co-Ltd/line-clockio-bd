@@ -8,6 +8,12 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
+from app.services.overtime import (
+    MONTHLY_OT_LIMIT,
+    compute_monthly_summaries,
+    monthly_ot_total,
+)
+
 from app.config import get_settings
 from app.database import get_db
 from app.models.check_in import CheckIn, CheckInType
@@ -167,7 +173,7 @@ async def liff_records(
     db: Session = Depends(get_db),
     _: None = Depends(_require_liff),
 ):
-    """Return this month's attendance records for the authenticated employee."""
+    """Return this month's daily attendance summaries with overtime calculation."""
     settings = get_settings()
     line_user_id = await _verify_line_token(payload.id_token, settings.liff_channel_id)
     employee = _get_employee(db, line_user_id)
@@ -182,22 +188,37 @@ async def liff_records(
             CheckIn.employee_id == employee.id,
             CheckIn.checked_at >= month_start,
         )
-        .order_by(CheckIn.checked_at.desc())
-        .limit(200)
+        .order_by(CheckIn.checked_at)
         .all()
     )
 
+    weekday_labels = ["一", "二", "三", "四", "五", "六", "日"]
+    summaries = compute_monthly_summaries(records, tz)
+    total_ot = monthly_ot_total(summaries)
+
+    def _fmt(dt: datetime | None) -> str | None:
+        return dt.astimezone(tz).strftime("%H:%M") if dt else None
+
     return {
         "month": now.strftime("%Y年%m月"),
+        "total_ot_counted_minutes": total_ot,
+        "exceeds_monthly_limit": total_ot > MONTHLY_OT_LIMIT,
         "records": [
             {
-                "type": r.type.value,
-                "type_label": "上班" if r.type == CheckInType.clock_in else "下班",
-                "time": r.checked_at.astimezone(tz).strftime("%m/%d %H:%M"),
-                "date": r.checked_at.astimezone(tz).strftime("%m/%d"),
-                "weekday": ["一","二","三","四","五","六","日"][r.checked_at.astimezone(tz).weekday()],
+                "date": s.date.strftime("%m/%d"),
+                "weekday": weekday_labels[s.date.weekday()],
+                "clock_in": _fmt(s.clock_in),
+                "clock_out": _fmt(s.clock_out),
+                "work_minutes": s.work_minutes,
+                "regular_minutes": s.regular_minutes,
+                "ot_tier1_minutes": s.ot_tier1_minutes,
+                "ot_tier2_minutes": s.ot_tier2_minutes,
+                "ot_counted_minutes": s.ot_counted_minutes,
+                "ot_remainder_minutes": s.ot_remainder_minutes,
+                "in_progress": s.in_progress,
+                "exceeds_legal_limit": s.exceeds_legal_limit,
             }
-            for r in records
+            for s in summaries
         ],
     }
 
