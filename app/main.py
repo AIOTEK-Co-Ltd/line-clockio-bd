@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.config import get_settings
@@ -18,6 +19,8 @@ app.add_middleware(
     https_only=not _settings.debug,  # Cloud Run terminates TLS at proxy; force https_only in prod
     max_age=8 * 3600,  # 8-hour session expiry
 )
+
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 app.include_router(webhook.router)
 app.include_router(liff.router)

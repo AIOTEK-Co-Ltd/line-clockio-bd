@@ -8,24 +8,22 @@
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     :root {
-      --green: #00b900;
-      --green-dark: #009a00;
-      --green-light: #e8f8e8;
-      --orange: #ff6b35;
-      --navy: #0f172a;
-      --amber: #d97706;
-      --text: #1a1a2e;
-      --sub: #6b7280;
-      --bg: #f3f4f6;
-      --card: #ffffff;
-      --radius: 16px;
+      --black:      #000000;
+      --grey-dark:  #333333;
+      --grey-mid:   #555555;
+      --grey-sub:   #6b7280;
+      --grey-light: rgba(255,255,255,.3);
+      --bg:         rgba(0,0,0,.05);
+      --card:       rgba(255,255,255,.88);
+      --text:       #111111;
+      --radius:     8px;
     }
 
     html, body { height: 100%; }
 
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang TC", sans-serif;
-      background: var(--bg);
+      background: #111 url('/static/bg.jpg') center center / cover no-repeat fixed;
       color: var(--text);
       overscroll-behavior: none;
     }
@@ -35,16 +33,28 @@
 
     /* ── Header ─────────────────────────────────────────────── */
     .header {
-      background: var(--navy);
+      background: var(--black);
       color: #fff;
       display: flex;
       align-items: center;
       justify-content: center;
-      padding: 14px 20px;
+      padding: 12px 20px;
       flex-shrink: 0;
       position: relative;
+      min-height: 52px;
     }
-    .header-title { font-size: 17px; font-weight: 700; letter-spacing: 0.5px; }
+    .header-logo {
+      height: 22px;
+      width: auto;
+      filter: invert(1);
+      display: block;
+    }
+    .header-title {
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      display: none;
+    }
     .header-back {
       position: absolute; left: 16px;
       background: none; border: none; color: #fff;
@@ -58,20 +68,23 @@
 
     /* ── Home: datetime card ─────────────────────────────────── */
     .datetime-card {
-      background: var(--navy);
+      background: rgba(0,0,0,.5);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      border: 1px solid rgba(255,255,255,.1);
       border-radius: var(--radius);
       color: #fff;
       text-align: center;
       padding: 24px 16px 20px;
       margin-bottom: 12px;
     }
-    .dt-date { font-size: 15px; color: #94a3b8; margin-bottom: 4px; }
+    .dt-date { font-size: 14px; color: #aaaaaa; margin-bottom: 4px; }
     .dt-time {
       font-size: 56px; font-weight: 800; letter-spacing: 3px;
-      color: var(--green); line-height: 1;
+      color: #ffffff; line-height: 1;
       margin-bottom: 10px;
     }
-    .dt-user { font-size: 13px; color: #94a3b8; }
+    .dt-user { font-size: 13px; color: #aaaaaa; }
 
     /* ── Punch buttons ───────────────────────────────────────── */
     .punch-row {
@@ -88,21 +101,22 @@
       align-items: center; gap: 4px;
       transition: opacity .15s, transform .1s;
     }
-    .punch-btn:active { opacity: .8; transform: scale(.97); }
-    .punch-btn:disabled { opacity: .45; cursor: not-allowed; transform: none; }
+    .punch-btn:active { opacity: .75; transform: scale(.97); }
+    .punch-btn:disabled { opacity: .4; cursor: not-allowed; transform: none; }
     .punch-btn .btn-label { font-size: 18px; }
     .punch-btn .btn-time  { font-size: 13px; font-weight: 500; opacity: .85; }
-    .btn-in  { background: var(--green); color: #fff; }
-    .btn-out { background: var(--orange); color: #fff; }
-    .btn-in.done  { background: #d1fae5; color: #065f46; }
-    .btn-out.done { background: #ffe4d6; color: #9a3412; }
+    .btn-in  { background: rgba(255,255,255,.92); color: #111; }
+    .btn-out { background: rgba(255,255,255,.65); color: #222; }
+    .btn-in.done  { background: rgba(255,255,255,.45); color: #333; }
+    .btn-out.done { background: rgba(255,255,255,.45); color: #333; }
 
     /* ── Section titles ──────────────────────────────────────── */
     .section-title {
-      font-size: 15px; font-weight: 700; color: var(--sub);
-      margin: 4px 0 10px; letter-spacing: 0.3px;
+      font-size: 12px; font-weight: 700; color: rgba(255,255,255,.75);
+      margin: 4px 0 10px; letter-spacing: 1px;
+      text-transform: uppercase;
     }
-    .section-title.amber { color: var(--amber); margin-top: 16px; }
+    .section-title.manager-label { color: rgba(255,255,255,.6); margin-top: 16px; }
 
     /* ── Feature grid ────────────────────────────────────────── */
     .feature-grid {
@@ -117,18 +131,19 @@
       text-align: center;
       cursor: pointer;
       transition: box-shadow .15s, transform .1s;
-      border: none;
-      box-shadow: 0 1px 4px rgba(0,0,0,.06);
+      border: 1px solid rgba(255,255,255,.35);
+      box-shadow: none;
+      backdrop-filter: blur(4px);
     }
-    .feature-item:active { transform: scale(.95); box-shadow: 0 0 0 2px var(--green); }
-    .feature-icon { font-size: 28px; margin-bottom: 8px; }
+    .feature-item:active { transform: scale(.95); box-shadow: 0 0 0 2px var(--black); }
+    .feature-icon { display: flex; justify-content: center; margin-bottom: 8px; color: var(--text); }
     .feature-label { font-size: 13px; font-weight: 600; color: var(--text); }
 
     /* ── Manager section ─────────────────────────────────────── */
     .manager-btn {
       width: 100%;
-      background: #fff7ed;
-      border: 1.5px solid #fed7aa;
+      background: var(--card);
+      border: 1px solid rgba(255,255,255,.35);
       border-radius: var(--radius);
       padding: 16px 18px;
       display: flex;
@@ -136,13 +151,14 @@
       justify-content: space-between;
       cursor: pointer;
       transition: opacity .15s;
+      backdrop-filter: blur(4px);
     }
-    .manager-btn:active { opacity: .8; }
+    .manager-btn:active { opacity: .75; }
     .manager-btn-left { display: flex; align-items: center; gap: 12px; }
-    .manager-btn-icon { font-size: 26px; }
-    .manager-btn-label { font-size: 16px; font-weight: 700; color: #92400e; }
+    .manager-btn-icon { display: flex; align-items: center; color: var(--text); }
+    .manager-btn-label { font-size: 16px; font-weight: 700; color: var(--text); }
     .pending-badge {
-      background: #ef4444; color: #fff;
+      background: var(--black); color: #fff;
       border-radius: 100px; padding: 3px 11px;
       font-size: 13px; font-weight: 700;
       display: none;
@@ -150,73 +166,77 @@
 
     /* ── Records screen ──────────────────────────────────────── */
     .month-title {
-      font-size: 17px; font-weight: 700;
-      text-align: center; margin-bottom: 14px; color: var(--navy);
+      font-size: 16px; font-weight: 700;
+      text-align: center; margin-bottom: 14px;
+      color: rgba(255,255,255,.9); text-shadow: 0 1px 2px rgba(0,0,0,.3);
     }
     .record-list { display: flex; flex-direction: column; gap: 8px; }
     .record-item {
       background: var(--card);
-      border-radius: 12px;
+      border-radius: var(--radius);
       padding: 14px 16px;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      box-shadow: 0 1px 3px rgba(0,0,0,.06);
+      border: 1px solid rgba(255,255,255,.35);
+      backdrop-filter: blur(4px);
     }
     .record-left { display: flex; align-items: center; gap: 12px; }
-    .record-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
-    .dot-in  { background: var(--green); }
-    .dot-out { background: var(--orange); }
-    .record-date { font-size: 13px; color: var(--sub); }
+    .record-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .dot-in  { background: var(--black); }
+    .dot-out { background: var(--grey-mid); }
+    .record-date { font-size: 13px; color: var(--grey-sub); }
     .record-type { font-size: 15px; font-weight: 600; }
-    .record-time { font-size: 16px; font-weight: 700; color: var(--navy); }
+    .record-time { font-size: 16px; font-weight: 700; color: var(--text); }
     .record-punch-row { display: flex; gap: 14px; margin-top: 6px; }
-    .record-punch { font-size: 14px; color: var(--sub); }
-    .record-punch span { font-weight: 700; color: var(--navy); }
+    .record-punch { font-size: 14px; color: var(--grey-sub); }
+    .record-punch span { font-weight: 700; color: var(--text); }
     .ot-tag {
       display: inline-block; margin-top: 6px;
-      background: #fff7ed; color: #c2410c;
-      border: 1px solid #fed7aa;
-      border-radius: 100px; padding: 2px 10px;
+      background: rgba(0,0,0,.1); color: var(--grey-dark);
+      border: 1px solid rgba(0,0,0,.15);
+      border-radius: 4px; padding: 2px 10px;
       font-size: 12px; font-weight: 600;
     }
     .ot-tag.legal-exceeded {
-      background: #fef2f2; color: #dc2626;
-      border-color: #fecaca;
+      background: rgba(0,0,0,.15); color: var(--black);
+      border-color: rgba(0,0,0,.25);
     }
     .ot-monthly-banner {
       background: var(--card);
-      border-radius: 12px;
+      border-radius: var(--radius);
       padding: 12px 16px;
       margin-bottom: 12px;
       display: flex; align-items: center; justify-content: space-between;
-      box-shadow: 0 1px 3px rgba(0,0,0,.06);
+      border: 1px solid rgba(255,255,255,.35);
+      backdrop-filter: blur(4px);
     }
-    .ot-monthly-label { font-size: 13px; color: var(--sub); font-weight: 500; }
-    .ot-monthly-value { font-size: 15px; font-weight: 700; color: var(--navy); }
-    .ot-monthly-banner.over-limit .ot-monthly-label { color: #dc2626; }
-    .ot-monthly-banner.over-limit .ot-monthly-value { color: #dc2626; }
+    .ot-monthly-label { font-size: 13px; color: var(--grey-sub); font-weight: 500; }
+    .ot-monthly-value { font-size: 15px; font-weight: 700; color: var(--text); }
+    .ot-monthly-banner.over-limit .ot-monthly-label { color: var(--black); font-weight: 700; }
+    .ot-monthly-banner.over-limit .ot-monthly-value { color: var(--black); }
 
     /* ── Makeup request form ─────────────────────────────────── */
     .form-group { margin-bottom: 16px; }
     .form-label {
-      display: block; font-size: 14px; font-weight: 600;
-      color: var(--sub); margin-bottom: 6px;
+      display: block; font-size: 13px; font-weight: 700;
+      color: var(--grey-sub); margin-bottom: 6px;
+      text-transform: uppercase; letter-spacing: 0.5px;
     }
     .form-input {
       width: 100%; padding: 12px 14px;
-      border-radius: 12px; border: 1.5px solid #e5e7eb;
-      font-size: 16px; background: var(--card); color: var(--text);
+      border-radius: var(--radius); border: 1.5px solid rgba(255,255,255,.4);
+      font-size: 16px; background: rgba(255,255,255,.9); color: var(--text);
       outline: none; appearance: none;
     }
-    .form-input:focus { border-color: var(--green); }
+    .form-input:focus { border-color: var(--black); }
     .form-textarea {
       width: 100%; padding: 12px 14px;
-      border-radius: 12px; border: 1.5px solid #e5e7eb;
-      font-size: 15px; background: var(--card); color: var(--text);
+      border-radius: var(--radius); border: 1.5px solid rgba(255,255,255,.4);
+      font-size: 15px; background: rgba(255,255,255,.9); color: var(--text);
       height: 100px; resize: none; outline: none;
     }
-    .form-textarea:focus { border-color: var(--green); }
+    .form-textarea:focus { border-color: var(--black); }
     .radio-row { display: flex; gap: 24px; }
     .radio-row label {
       font-size: 15px; font-weight: 500; color: var(--text);
@@ -224,11 +244,12 @@
     }
     .submit-btn {
       width: 100%; padding: 16px; border-radius: var(--radius);
-      background: var(--green); color: #fff;
-      font-size: 17px; font-weight: 700; border: none; cursor: pointer;
+      background: var(--black); color: #fff;
+      font-size: 16px; font-weight: 700; border: none; cursor: pointer;
       margin-top: 8px; transition: opacity .15s;
+      letter-spacing: 0.5px;
     }
-    .submit-btn:active { opacity: .8; }
+    .submit-btn:active { opacity: .75; }
 
     /* ── Manager review cards ────────────────────────────────── */
     .review-card {
@@ -236,7 +257,8 @@
       border-radius: var(--radius);
       padding: 16px;
       margin-bottom: 10px;
-      box-shadow: 0 1px 4px rgba(0,0,0,.06);
+      border: 1px solid rgba(255,255,255,.35);
+      backdrop-filter: blur(4px);
     }
     .review-header {
       display: flex; align-items: center;
@@ -244,45 +266,55 @@
     }
     .review-name { font-size: 16px; font-weight: 700; }
     .type-badge {
-      padding: 3px 10px; border-radius: 100px;
-      font-size: 13px; font-weight: 600;
+      padding: 3px 10px; border-radius: 4px;
+      font-size: 12px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.5px;
     }
-    .badge-in  { background: #d1fae5; color: #065f46; }
-    .badge-out { background: #ffe4d6; color: #9a3412; }
-    .review-time { font-size: 14px; color: var(--sub); margin-bottom: 8px; }
+    .badge-in  { background: #111; color: #fff; }
+    .badge-out { background: #555; color: #fff; }
+    .review-time {
+      display: flex; align-items: center; gap: 5px;
+      font-size: 14px; color: var(--grey-sub); margin-bottom: 8px;
+    }
     .review-reason {
+      display: flex; align-items: flex-start; gap: 6px;
       font-size: 14px; color: var(--text);
-      background: #f8fafc; border-radius: 8px;
+      background: rgba(0,0,0,.05); border-radius: var(--radius);
       padding: 8px 12px; margin-bottom: 12px;
+      border: 1px solid rgba(0,0,0,.08);
+    }
+    .meta-icon {
+      display: inline-flex; align-items: center; flex-shrink: 0;
+      position: relative; top: 1px; color: var(--grey-sub);
     }
     .review-actions { display: flex; gap: 10px; }
     .btn-approve, .btn-reject {
-      flex: 1; padding: 12px; border-radius: 12px;
-      font-size: 15px; font-weight: 700; border: none; cursor: pointer;
+      flex: 1; padding: 12px; border-radius: var(--radius);
+      font-size: 15px; font-weight: 700; cursor: pointer;
       transition: opacity .15s;
     }
-    .btn-approve { background: var(--green); color: #fff; }
-    .btn-reject  { background: #fee2e2; color: #dc2626; }
-    .btn-approve:active, .btn-reject:active { opacity: .8; }
+    .btn-approve { background: var(--black); color: #fff; border: none; }
+    .btn-reject  { background: rgba(0,0,0,.06); color: var(--grey-dark); border: 1.5px solid rgba(0,0,0,.15); }
+    .btn-approve:active, .btn-reject:active { opacity: .75; }
 
     /* ── Empty / loading state ───────────────────────────────── */
     .empty-state {
-      text-align: center; color: var(--sub);
+      text-align: center; color: rgba(255,255,255,.7);
       padding: 40px 0; font-size: 15px;
     }
 
     /* ── Loading overlay ─────────────────────────────────────── */
     #loading-overlay {
       position: fixed; inset: 0;
-      background: rgba(15,23,42,.7);
+      background: rgba(0,0,0,.65);
       display: none; flex-direction: column;
       align-items: center; justify-content: center;
       z-index: 100;
     }
     .spinner {
-      width: 48px; height: 48px;
-      border: 4px solid rgba(255,255,255,.3);
-      border-top-color: var(--green);
+      width: 44px; height: 44px;
+      border: 3px solid rgba(255,255,255,.25);
+      border-top-color: #ffffff;
       border-radius: 50%;
       animation: spin .8s linear infinite;
       margin-bottom: 16px;
@@ -293,7 +325,7 @@
     /* ── Toast ───────────────────────────────────────────────── */
     #toast {
       position: fixed; bottom: 32px; left: 50%; transform: translateX(-50%);
-      background: #1e293b; color: #fff;
+      background: var(--black); color: #fff;
       padding: 12px 24px; border-radius: 100px;
       font-size: 14px; font-weight: 500;
       opacity: 0; transition: opacity .3s;
@@ -308,7 +340,8 @@
   <!-- Header -->
   <div class="header">
     <button class="header-back" id="btn-back" onclick="goBack()">‹</button>
-    <span class="header-title" id="header-title">Aiotek 打卡系統</span>
+    <img class="header-logo" id="header-logo" src="/static/aiotek-logo.png" alt="AIOTEK">
+    <span class="header-title" id="header-title"></span>
   </div>
 
   <!-- ── Home screen ───────────────────────────────────────── -->
@@ -334,25 +367,54 @@
     <div class="section-title">個人專區</div>
     <div class="feature-grid">
       <button class="feature-item" onclick="showRecords()">
-        <div class="feature-icon">📅</div>
+        <div class="feature-icon">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="4" width="18" height="18" rx="2"/>
+            <path d="M16 2v4M8 2v4M3 10h18"/>
+            <circle cx="8"  cy="14" r="1" fill="currentColor" stroke="none"/>
+            <circle cx="12" cy="14" r="1" fill="currentColor" stroke="none"/>
+            <circle cx="16" cy="14" r="1" fill="currentColor" stroke="none"/>
+            <circle cx="8"  cy="18" r="1" fill="currentColor" stroke="none"/>
+            <circle cx="12" cy="18" r="1" fill="currentColor" stroke="none"/>
+          </svg>
+        </div>
         <div class="feature-label">出勤紀錄</div>
       </button>
       <button class="feature-item" onclick="showMakeupForm()">
-        <div class="feature-icon">📝</div>
+        <div class="feature-icon">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <polyline points="14,2 14,8 20,8"/>
+            <line x1="8" y1="13" x2="16" y2="13"/>
+            <line x1="8" y1="17" x2="13" y2="17"/>
+          </svg>
+        </div>
         <div class="feature-label">補打卡</div>
       </button>
       <button class="feature-item" onclick="showLeave()">
-        <div class="feature-icon">🌿</div>
+        <div class="feature-icon">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="4" width="18" height="18" rx="2"/>
+            <path d="M16 2v4M8 2v4M3 10h18"/>
+            <path d="M9.5 18l5-5M14.5 18l-5-5"/>
+          </svg>
+        </div>
         <div class="feature-label">請假</div>
       </button>
     </div>
 
     <!-- Manager section (hidden until is_manager confirmed) -->
     <div id="manager-section" style="display:none">
-      <div class="section-title amber">管理員專區</div>
+      <div class="section-title manager-label">管理員專區</div>
       <button class="manager-btn" onclick="showMakeupReview()">
         <div class="manager-btn-left">
-          <div class="manager-btn-icon">🔍</div>
+          <div class="manager-btn-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/>
+              <rect x="9" y="3" width="6" height="4" rx="1"/>
+              <path d="M9 12l2 2 4-4"/>
+            </svg>
+          </div>
           <div class="manager-btn-label">補打卡審核</div>
         </div>
         <div class="pending-badge" id="pending-badge">0</div>
@@ -389,7 +451,7 @@
       </div>
     </div>
     <div class="form-group">
-      <label class="form-label">原因 <span style="color:var(--sub);font-weight:400">(最多 500 字)</span></label>
+      <label class="form-label">原因 <span style="color:var(--grey-sub);font-weight:400;text-transform:none">(最多 500 字)</span></label>
       <textarea class="form-textarea" id="makeup-reason" placeholder="請說明補打卡原因…" maxlength="500"></textarea>
     </div>
     <button class="submit-btn" onclick="submitMakeupRequest()">送出申請</button>
@@ -402,7 +464,14 @@
 
   <!-- ── Coming soon: leave ───────────────────────────────── -->
   <div class="screen" id="screen-leave">
-    <div class="empty-state">🌿<br><br>請假功能<br>即將推出</div>
+    <div class="empty-state">
+      <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" style="opacity:.55;display:block;margin:0 auto 16px">
+        <rect x="3" y="4" width="18" height="18" rx="2"/>
+        <path d="M16 2v4M8 2v4M3 10h18"/>
+        <path d="M9.5 18l5-5M14.5 18l-5-5"/>
+      </svg>
+      請假功能<br>即將推出
+    </div>
   </div>
 
 </div>
@@ -424,6 +493,10 @@
   let idToken   = null;
   let isManager = false;
   let _prevScreen = "screen-home";
+
+  // ── Inline SVG icons (used in JS-rendered templates) ──────
+  const SVG_CAL_SM  = `<svg class="meta-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>`;
+  const SVG_CHAT_SM = `<svg class="meta-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`;
 
   // ── XSS escape helper ─────────────────────────────────────
   function esc(s) {
@@ -452,13 +525,17 @@
     _prevScreen = document.querySelector(".screen.active")?.id || "screen-home";
     document.querySelectorAll(".screen").forEach(s => s.classList.remove("active"));
     document.getElementById(id).classList.add("active");
+
+    const isHome = id === "screen-home";
+    document.getElementById("header-logo").style.display = isHome ? "block" : "none";
+    document.getElementById("header-title").style.display = isHome ? "none" : "block";
     document.getElementById("header-title").textContent = title;
     document.getElementById("btn-back").style.display = showBack ? "block" : "none";
   }
   function goBack() {
-    showScreen("screen-home", "Aiotek 打卡系統", false);
+    showScreen("screen-home", "", false);
   }
-  function showHome() { showScreen("screen-home", "Aiotek 打卡系統", false); }
+  function showHome() { showScreen("screen-home", "", false); }
   function showLeave() { showScreen("screen-leave", "請假", true); }
 
   // ── Records ────────────────────────────────────────────────
@@ -592,8 +669,8 @@
             <span class="review-name">${esc(r.employee_name)}</span>
             <span class="type-badge ${r.type === "clock_in" ? "badge-in" : "badge-out"}">${esc(r.type_label)}打卡</span>
           </div>
-          <div class="review-time">📅 ${esc(r.requested_at)}</div>
-          <div class="review-reason">💬 ${esc(r.reason)}</div>
+          <div class="review-time">${SVG_CAL_SM} ${esc(r.requested_at)}</div>
+          <div class="review-reason">${SVG_CHAT_SM} ${esc(r.reason)}</div>
           <div class="review-actions">
             <button class="btn-approve" onclick="reviewRequest(${r.id},'approve',this)">✓ 核准</button>
             <button class="btn-reject"  onclick="reviewRequest(${r.id},'reject',this)">✕ 拒絕</button>
