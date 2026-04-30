@@ -23,9 +23,19 @@
 
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang TC", sans-serif;
-      background: #111 url('/static/bg.jpg') center center / cover no-repeat fixed;
+      background: #111;
       color: var(--text);
       overscroll-behavior: none;
+    }
+
+    /* Photo background via pseudo-element so we can darken without affecting content */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      background: url('/static/bg.jpg') center 40% / cover no-repeat;
+      filter: brightness(0.68);
     }
 
     /* ── App shell ──────────────────────────────────────────── */
@@ -33,12 +43,12 @@
 
     /* ── Header ─────────────────────────────────────────────── */
     .header {
-      background: var(--black);
+      background: transparent;
       color: #fff;
       display: flex;
       align-items: center;
       justify-content: center;
-      padding: 12px 20px;
+      padding: 14px 20px;
       flex-shrink: 0;
       position: relative;
       min-height: 52px;
@@ -54,12 +64,14 @@
       font-weight: 700;
       letter-spacing: 0.5px;
       display: none;
+      text-shadow: 0 1px 4px rgba(0,0,0,.6);
     }
     .header-back {
       position: absolute; left: 16px;
       background: none; border: none; color: #fff;
       font-size: 22px; cursor: pointer; padding: 4px 8px;
       display: none;
+      text-shadow: 0 1px 4px rgba(0,0,0,.6);
     }
 
     /* ── Scrollable content ──────────────────────────────────── */
@@ -220,7 +232,7 @@
     .form-group { margin-bottom: 16px; }
     .form-label {
       display: block; font-size: 13px; font-weight: 700;
-      color: var(--grey-sub); margin-bottom: 6px;
+      color: rgba(255,255,255,.85); margin-bottom: 6px;
       text-transform: uppercase; letter-spacing: 0.5px;
     }
     .form-input {
@@ -239,7 +251,7 @@
     .form-textarea:focus { border-color: var(--black); }
     .radio-row { display: flex; gap: 24px; }
     .radio-row label {
-      font-size: 15px; font-weight: 500; color: var(--text);
+      font-size: 15px; font-weight: 500; color: rgba(255,255,255,.85);
       display: flex; align-items: center; gap: 7px; cursor: pointer;
     }
     .submit-btn {
@@ -451,7 +463,7 @@
       </div>
     </div>
     <div class="form-group">
-      <label class="form-label">原因 <span style="color:var(--grey-sub);font-weight:400;text-transform:none">(最多 500 字)</span></label>
+      <label class="form-label">原因 <span style="color:rgba(255,255,255,.5);font-weight:400;text-transform:none">(最多 500 字)</span></label>
       <textarea class="form-textarea" id="makeup-reason" placeholder="請說明補打卡原因…" maxlength="500"></textarea>
     </div>
     <button class="submit-btn" onclick="submitMakeupRequest()">送出申請</button>
