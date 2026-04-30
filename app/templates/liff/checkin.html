@@ -19,13 +19,20 @@
       --radius:     8px;
     }
 
-    html, body { height: 100%; }
+    html {
+      height: 100%;
+      overflow: hidden;
+    }
 
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang TC", sans-serif;
       background: #111;
       color: var(--text);
-      overscroll-behavior: none;
+      /* iOS: position:fixed locks the document so the background never scrolls */
+      position: fixed;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
     }
 
     /* Photo background via pseudo-element so we can darken without affecting content */
@@ -75,8 +82,11 @@
     }
 
     /* ── Scrollable content ──────────────────────────────────── */
-    .screen { flex: 1; overflow-y: auto; padding: 16px; display: none; }
+    .screen { flex: 1; overflow-y: hidden; padding: 16px; display: none; }
     .screen.active { display: block; }
+    /* Only these screens contain lists that can grow beyond one viewport */
+    #screen-records,
+    #screen-makeup-review { overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
 
     /* ── Home: datetime card ─────────────────────────────────── */
     .datetime-card {
