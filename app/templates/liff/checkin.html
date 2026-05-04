@@ -99,7 +99,7 @@
 
     /* ── Scrollable content ──────────────────────────────────── */
     /* overflow-y:auto on all screens — background is position:fixed so no white space ever */
-    .screen { flex: 1; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; padding: 16px; display: none; }
+    .screen { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; padding: 16px; display: none; }
     .screen.active { display: block; }
 
     /* ── Home: datetime card ─────────────────────────────────── */
