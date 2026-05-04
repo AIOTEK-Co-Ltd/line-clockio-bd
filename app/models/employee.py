@@ -21,6 +21,7 @@ class Employee(Base):
     # UNIQUE + nullable: PostgreSQL (our target DB) allows multiple NULL values in a
     # UNIQUE column (NULL ≠ NULL per SQL standard), so this is safe.
     employee_number: Mapped[Optional[str]] = mapped_column(String(20), unique=True, nullable=True, index=True)
+    card_number: Mapped[Optional[str]] = mapped_column(String(8), unique=True, nullable=True, index=True)
     full_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     # LINE UID — NULL when HR pre-loads record before employee completes binding
     line_user_id: Mapped[Optional[str]] = mapped_column(String(50), unique=True, nullable=True, index=True)

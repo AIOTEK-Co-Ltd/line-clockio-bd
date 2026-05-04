@@ -405,6 +405,20 @@
       </button>
     </div>
 
+    <!-- Profile button -->
+    <button class="manager-btn" style="margin-top:10px" onclick="showProfile()">
+      <div class="manager-btn-left">
+        <div class="manager-btn-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+            <circle cx="12" cy="7" r="4"/>
+          </svg>
+        </div>
+        <div class="manager-btn-label">個人資料</div>
+      </div>
+      <div id="card-badge" style="display:none;background:#d97706;color:#fff;border-radius:100px;padding:3px 11px;font-size:13px;font-weight:700;">設定卡號</div>
+    </button>
+
     <!-- Manager section (hidden until is_manager confirmed) -->
     <div id="manager-section" style="display:none">
       <div class="section-title manager-label">管理員專區</div>
@@ -464,6 +478,21 @@
     <div id="review-list"></div>
   </div>
 
+  <!-- ── Profile screen ───────────────────────────────────── -->
+  <div class="screen" id="screen-profile">
+    <div class="form-group">
+      <label class="form-label">姓名</label>
+      <div id="profile-name" class="form-input" style="background:rgba(255,255,255,.55);color:#555;cursor:default;">—</div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">員工卡號 <span style="color:rgba(255,255,255,.5);font-weight:400;text-transform:none">(8 碼英數字)</span></label>
+      <input class="form-input" type="text" id="profile-card"
+             maxlength="8" placeholder="尚未設定"
+             style="text-transform:uppercase;letter-spacing:2px;">
+    </div>
+    <button class="submit-btn" id="card-save-btn" onclick="submitCardNumber()">儲存卡號</button>
+  </div>
+
 
 </div>
 
@@ -471,6 +500,17 @@
 <div id="loading-overlay">
   <div class="spinner"></div>
   <div id="loading-msg">正在取得位置資訊…</div>
+</div>
+
+<!-- Confirm dialog -->
+<div id="confirm-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:150;align-items:center;justify-content:center;padding:24px;">
+  <div style="background:#fff;border-radius:12px;padding:24px;width:100%;max-width:320px;text-align:center;">
+    <div id="confirm-msg" style="font-size:15px;font-weight:600;color:#111;margin-bottom:20px;line-height:1.6;"></div>
+    <div style="display:flex;gap:10px;">
+      <button id="confirm-cancel" style="flex:1;padding:13px;border-radius:8px;background:rgba(0,0,0,.06);color:#555;font-size:15px;font-weight:700;border:1.5px solid rgba(0,0,0,.15);cursor:pointer;">取消</button>
+      <button id="confirm-ok" style="flex:1;padding:13px;border-radius:8px;background:#111;color:#fff;font-size:15px;font-weight:700;border:none;cursor:pointer;">確定下班</button>
+    </div>
+  </div>
 </div>
 
 <!-- Toast -->
@@ -484,6 +524,8 @@
   let idToken   = null;
   let isManager = false;
   let _prevScreen = "screen-home";
+  let _cardNumber = null;
+  let _clockInTimestamp = null;
 
   // ── Inline SVG icons (used in JS-rendered templates) ──────
   const SVG_CAL_SM  = `<svg class="meta-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>`;
@@ -745,6 +787,9 @@
       if (data.clock_in_time) {
         document.getElementById("in-time").textContent = data.clock_in_time;
         document.getElementById("btn-in").classList.add("done");
+        const [h, m] = data.clock_in_time.split(":").map(Number);
+        _clockInTimestamp = new Date();
+        _clockInTimestamp.setHours(h, m, 0, 0);
       }
       if (data.clock_out_time) {
         document.getElementById("out-time").textContent = data.clock_out_time;
@@ -761,14 +806,45 @@
           badge.style.display = "inline-block";
         }
       }
+
+      _cardNumber = data.card_number || null;
+      if (!_cardNumber) {
+        document.getElementById("card-badge").style.display = "inline-block";
+      }
     } catch (e) {
       console.error("refreshStatus failed:", e);
       toast(`${SVG_WARN} 狀態載入失敗，請重新整理`, 4000);
     }
   }
 
+  // ── Confirm dialog ─────────────────────────────────────────
+  function showConfirm(msg) {
+    return new Promise(resolve => {
+      document.getElementById("confirm-msg").textContent = msg;
+      document.getElementById("confirm-overlay").style.display = "flex";
+      document.getElementById("confirm-ok").onclick = () => {
+        document.getElementById("confirm-overlay").style.display = "none";
+        resolve(true);
+      };
+      document.getElementById("confirm-cancel").onclick = () => {
+        document.getElementById("confirm-overlay").style.display = "none";
+        resolve(false);
+      };
+    });
+  }
+
   // ── Punch ──────────────────────────────────────────────────
   async function doPunch(type) {
+    if (type === "clock_out" && _clockInTimestamp) {
+      const workedMinutes = (new Date() - _clockInTimestamp) / 60000;
+      if (workedMinutes < 480) {
+        const h = Math.floor(workedMinutes / 60);
+        const m = Math.floor(workedMinutes % 60);
+        const label = h > 0 ? `${h} 小時 ${m} 分` : `${m} 分`;
+        const ok = await showConfirm(`目前上班時數僅 ${label}，未滿 8 小時，確定要下班打卡？`);
+        if (!ok) return;
+      }
+    }
     setLoading(true, "正在取得位置資訊…");
     let position;
     try {
@@ -794,6 +870,7 @@
       if (type === "clock_in") {
         document.getElementById("in-time").textContent = data.time;
         document.getElementById("btn-in").classList.add("done");
+        _clockInTimestamp = new Date();
       } else {
         document.getElementById("out-time").textContent = data.time;
         document.getElementById("btn-out").classList.add("done");
@@ -807,6 +884,41 @@
         e.status === 403 ? "❌ 帳號未綁定，請先完成 Email 綁定" :
         "❌ 打卡失敗，請重試";
       toast(msg, 3500);
+    }
+  }
+
+  // ── Profile / card number ──────────────────────────────────
+  function showProfile() {
+    document.getElementById("profile-name").textContent =
+      document.getElementById("dt-user").textContent.trim() || "—";
+    document.getElementById("profile-card").value = _cardNumber || "";
+    showScreen("screen-profile", "個人資料", true);
+  }
+
+  async function submitCardNumber() {
+    const raw = document.getElementById("profile-card").value.trim().toUpperCase();
+    if (!raw) { toast(`${SVG_WARN} 請輸入卡號`); return; }
+    if (!/^[0-9A-Z]{8}$/.test(raw)) { toast(`${SVG_WARN} 卡號須為 8 碼英數字`); return; }
+
+    const btn = document.getElementById("card-save-btn");
+    if (btn.disabled) return;
+    btn.disabled = true;
+    setLoading(true, "儲存中…");
+    try {
+      const data = await apiPost("/liff/update_card", {
+        id_token: idToken,
+        card_number: raw,
+      });
+      setLoading(false);
+      btn.disabled = false;
+      _cardNumber = data.card_number;
+      document.getElementById("card-badge").style.display = "none";
+      toast(`${SVG_OK} 卡號已儲存：${esc(data.card_number)}`);
+      goBack();
+    } catch (e) {
+      setLoading(false);
+      btn.disabled = false;
+      toast(`${SVG_ERR} ${esc(e.detail || "儲存失敗，請重試")}`, 3500);
     }
   }
 

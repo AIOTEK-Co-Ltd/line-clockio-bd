@@ -106,6 +106,11 @@ class MakeupReviewPayload(BaseModel):
     action: str  # "approve" or "reject"
 
 
+class UpdateCardRequest(BaseModel):
+    id_token: str
+    card_number: str = Field(..., min_length=8, max_length=8, pattern=r'^[0-9A-Za-z]{8}$')
+
+
 # ── Routes ─────────────────────────────────────────────────────────────────────
 
 @router.get("/liff/")
@@ -164,6 +169,7 @@ async def liff_status(
         "display_name": employee.display_name or employee.full_name or employee.email,
         "is_manager": employee.is_manager,
         "pending_makeup_count": pending_count,
+        "card_number": employee.card_number,
     }
 
 
@@ -457,3 +463,35 @@ async def liff_makeup_review(
 
     db.commit()
     return {"success": True, "message": msg}
+
+
+# ── Card number ────────────────────────────────────────────────────────────────
+
+@router.post("/liff/update_card")
+async def liff_update_card(
+    payload: UpdateCardRequest,
+    db: Session = Depends(get_db),
+    _: None = Depends(_require_liff),
+):
+    """Employee saves or updates their 8-character punch card number."""
+    settings = get_settings()
+    line_user_id = await _verify_line_token(payload.id_token, settings.liff_channel_id)
+    employee = _get_employee(db, line_user_id)
+
+    card = payload.card_number.upper()
+
+    conflict = db.query(Employee).filter(
+        Employee.card_number == card,
+        Employee.id != employee.id,
+    ).first()
+    if conflict:
+        raise HTTPException(status_code=409, detail="此卡號已被其他員工使用，請確認後重新輸入。")
+
+    employee.card_number = card
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="此卡號已被其他員工使用，請確認後重新輸入。")
+
+    return {"success": True, "card_number": card}

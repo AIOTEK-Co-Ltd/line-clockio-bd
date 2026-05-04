@@ -2,9 +2,10 @@ import asyncio
 import csv
 import hmac
 import io
+import re
 import secrets
 from datetime import datetime
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -13,11 +14,15 @@ from fastapi.responses import RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session, contains_eager
 
+from sqlalchemy.exc import IntegrityError
+
 from app.config import get_settings
 from app.database import get_db
 from app.models.check_in import CheckIn, CheckInType
 from app.models.employee import Employee
 from app.services.mailgun import send_invitation_email
+
+_CARD_RE = re.compile(r'^[0-9A-Za-z]{8}$')
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 templates = Jinja2Templates(directory="app/templates")
@@ -123,7 +128,7 @@ async def callback(
 ):
     """Handle LINE Login OAuth callback, verify identity, and create session."""
     if error:
-        return RedirectResponse(f"/dashboard/login?error={error}")
+        return RedirectResponse(f"/dashboard/login?error={quote(error)}")
 
     stored_state = request.session.pop("oauth_state", None)
     if not state or state != stored_state:
@@ -259,7 +264,7 @@ async def export_csv(
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow([
-        "員工編號", "姓名", "Email",
+        "員工編號", "姓名", "Email", "員工卡號",
         "打卡類型", "打卡時間(UTC+8)",
         "GPS緯度", "GPS經度", "IP位址",
         "匯出時間",
@@ -270,6 +275,7 @@ async def export_csv(
             _csv_safe(emp.employee_number),
             _csv_safe(emp.full_name or emp.display_name),
             _csv_safe(emp.email),
+            _csv_safe(emp.card_number),
             "上班打卡" if ci.type == CheckInType.clock_in else "下班打卡",
             ci.checked_at.astimezone(tz).strftime("%Y-%m-%d %H:%M:%S"),
             ci.latitude,
@@ -359,6 +365,12 @@ async def hr_import(
         emp_no = (row.get("員工編號") or row.get("employee_number") or "").strip()
         full_name = (row.get("姓名") or row.get("full_name") or "").strip()
         email = (row.get("Email") or row.get("email") or "").strip().lower()
+        raw_card = (row.get("員工卡號") or row.get("card_number") or "").strip()
+        if raw_card:
+            raw_card = raw_card.upper()
+            card_no = raw_card if _CARD_RE.match(raw_card) else None
+        else:
+            card_no = None
 
         if not email:
             errors += 1
@@ -370,10 +382,13 @@ async def hr_import(
                 existing.employee_number = emp_no
             if full_name:
                 existing.full_name = full_name
+            if card_no:
+                existing.card_number = card_no
             updated += 1
         else:
             db.add(Employee(
                 employee_number=emp_no or None,
+                card_number=card_no,
                 full_name=full_name or None,
                 email=email,
             ))
@@ -381,7 +396,14 @@ async def hr_import(
             created += 1
 
     # Commit all DB changes first — emails sent after so a rollback never orphans sent mail
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        return RedirectResponse(
+            "/dashboard/employees?imported=1&created=0&updated=0&errors=1",
+            status_code=303,
+        )
 
     # Send invitation emails concurrently (max 5 in parallel) to avoid Cloud Run timeout
     sem = asyncio.Semaphore(5)
@@ -420,3 +442,49 @@ async def resend_invite(
             employee.full_name or employee.display_name or employee.email,
         )
     return RedirectResponse("/dashboard/employees", status_code=303)
+
+
+# ── Factory punch export ──────────────────────────────────────────────────────
+
+_FACTORY_MACHINE = "0000000005"  # office = machine 5
+
+
+@router.get("/export/factory")
+async def export_factory(
+    request: Request,
+    db: Session = Depends(get_db),
+    employee_id: int | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+):
+    if not _is_manager(request):
+        return RedirectResponse("/dashboard/login")
+
+    settings = get_settings()
+    tz = ZoneInfo(settings.timezone)
+
+    check_ins = (
+        _build_checkin_query(db, tz, employee_id, date_from, date_to)
+        .filter(Employee.card_number.isnot(None))
+        .order_by(CheckIn.checked_at.asc())
+        .all()
+    )
+
+    lines: list[str] = []
+    for ci in check_ins:
+        emp = ci.employee
+        local_dt = ci.checked_at.astimezone(tz)
+        lines.append(
+            f"{_FACTORY_MACHINE},"
+            f"{emp.card_number},"
+            f"{local_dt.strftime('%Y/%m/%d')},"
+            f"{local_dt.strftime('%H:%M:%S')}"
+        )
+
+    content = "\n".join(lines) + ("\n" if lines else "")
+    filename = f"factory_{datetime.now(tz).strftime('%Y%m%d_%H%M%S')}.txt"
+    return StreamingResponse(
+        iter([content.encode("utf-8")]),
+        media_type="text/plain",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
