@@ -19,40 +19,25 @@
       --radius:     8px;
     }
 
-    html, body {
-      height: 100%;
-      background: #111;
-      overscroll-behavior: none;
-    }
+    html, body { height: 100%; }
 
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang TC", sans-serif;
+      background:
+        linear-gradient(rgba(0,0,0,.38), rgba(0,0,0,.38)),
+        #111 url('/static/bg.jpg') center 40% / cover no-repeat fixed;
       color: var(--text);
-    }
-
-    /* Background photo */
-    body::before {
-      content: '';
-      position: fixed;
-      inset: 0;
-      z-index: 0;
-      background: url('/static/bg.jpg') center 40% / cover no-repeat;
-      filter: brightness(0.68);
+      overscroll-behavior: none;
     }
 
     /* ── App shell ──────────────────────────────────────────── */
-    /* position:fixed with inset:0 gives a true viewport-bound container on iOS —
-       flex children with overflow-y:auto scroll reliably inside it */
     #app {
-      position: fixed;
-      top: 0; bottom: 0; left: 0; right: 0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
       max-width: 480px;
       margin: 0 auto;
-      z-index: 1;
-    }
-
-    @media (min-width: 480px) {
-      body::before { background-position: center center; }
     }
 
     /* ── Header ─────────────────────────────────────────────── */
@@ -63,10 +48,9 @@
       align-items: center;
       justify-content: center;
       padding: 14px 20px;
-      position: absolute;
-      top: 0; left: 0; right: 0;
-      height: 52px;
-      z-index: 2;
+      flex-shrink: 0;
+      position: relative;
+      min-height: 52px;
     }
     .header-logo {
       height: 22px;
@@ -91,16 +75,7 @@
 
     /* ── Scrollable content ──────────────────────────────────── */
     /* overflow-y:auto on all screens — background is position:fixed so no white space ever */
-    .screen {
-      position: absolute;
-      top: 52px;
-      left: 0; right: 0; bottom: 0;
-      overflow-y: scroll;
-      -webkit-overflow-scrolling: touch;
-      touch-action: pan-y;
-      padding: 16px;
-      display: none;
-    }
+    .screen { flex: 1; min-height: 0; overflow-y: auto; padding: 16px; display: none; }
     .screen.active { display: block; }
 
     /* ── Home: datetime card ─────────────────────────────────── */
