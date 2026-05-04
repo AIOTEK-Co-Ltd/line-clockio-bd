@@ -35,7 +35,7 @@
       overflow: hidden;
     }
 
-    /* Photo background via pseudo-element so we can darken without affecting content */
+    /* Photo background — position:fixed means it never scrolls and never shows white space */
     body::before {
       content: '';
       position: fixed;
@@ -46,7 +46,23 @@
     }
 
     /* ── App shell ──────────────────────────────────────────── */
-    #app { height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+    #app {
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      /* On tablet/desktop: constrain to phone width and center */
+      max-width: 480px;
+      margin: 0 auto;
+      position: relative;
+    }
+
+    /* On wider screens, show the background more naturally behind the centered app */
+    @media (min-width: 480px) {
+      body::before {
+        background-position: center center;
+      }
+    }
 
     /* ── Header ─────────────────────────────────────────────── */
     .header {
@@ -82,11 +98,9 @@
     }
 
     /* ── Scrollable content ──────────────────────────────────── */
-    .screen { flex: 1; overflow-y: hidden; padding: 16px; display: none; }
+    /* overflow-y:auto on all screens — background is position:fixed so no white space ever */
+    .screen { flex: 1; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; padding: 16px; display: none; }
     .screen.active { display: block; }
-    /* Only these screens contain lists that can grow beyond one viewport */
-    #screen-records,
-    #screen-makeup-review { overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
 
     /* ── Home: datetime card ─────────────────────────────────── */
     .datetime-card {
