@@ -217,7 +217,7 @@ def test_records_returns_month_label(client, db):
 
 
 def test_records_includes_checkin_entries(client, db):
-    """Records lists this month's check-in events with correct shape."""
+    """Records returns daily summaries with overtime fields."""
     emp = _add_employee(db)
     now_utc = datetime.now(timezone.utc)
     _add_checkin(db, emp.id, CheckInType.clock_in, now_utc)
@@ -228,14 +228,18 @@ def test_records_includes_checkin_entries(client, db):
         resp = client.post("/liff/records", json={"id_token": "tok"})
 
     assert resp.status_code == 200
-    records = resp.json()["records"]
+    body = resp.json()
+    assert "total_ot_counted_minutes" in body
+    assert "exceeds_monthly_limit" in body
+    records = body["records"]
     assert len(records) == 1
     r = records[0]
-    assert r["type"] == "clock_in"
-    assert r["type_label"] == "上班"
     assert "date" in r
     assert "weekday" in r
-    assert "time" in r
+    assert "clock_in" in r
+    assert "clock_out" in r
+    assert "ot_counted_minutes" in r
+    assert r["in_progress"] is True   # only clock_in, no clock_out
 
 
 def test_records_403_for_unbound_user(db):
