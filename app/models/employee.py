@@ -4,14 +4,14 @@ import datetime
 import re
 from typing import TYPE_CHECKING, List, Optional
 
-# Single source of truth for card number format — imported by routers and webhook
-CARD_NUMBER_RE = re.compile(r'^[0-9A-Za-z]{8}$')
-
-from sqlalchemy import String, Boolean, DateTime
+from sqlalchemy import Boolean, DateTime, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
 from app.database import Base
+
+# Single source of truth for card number format — imported by routers and webhook
+CARD_NUMBER_RE = re.compile(r'^[0-9A-Za-z]{8}$')
 
 if TYPE_CHECKING:
     from app.models.check_in import CheckIn

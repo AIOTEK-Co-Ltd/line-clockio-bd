@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Sequence
 from zoneinfo import ZoneInfo
 
 if TYPE_CHECKING:
-    from app.models.check_in import CheckIn, CheckInType
+    from app.models.check_in import CheckIn
 
 # ── 勞基法常數（法規修改時只改這個區塊）─────────────────────
 REGULAR_WORK_MINUTES = 480   # 正常工時 8 小時
