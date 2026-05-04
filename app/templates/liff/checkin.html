@@ -21,7 +21,6 @@
 
     html {
       height: 100%;
-      background: #111; /* prevents white flash below app on iOS */
       overflow: hidden;
     }
 
@@ -34,33 +33,29 @@
       overscroll-behavior: none;
     }
 
-    /* Photo background — position:fixed means it never scrolls and never shows white space */
+    /* Background photo — z-index:0 so it renders above the html canvas (not below it) */
     body::before {
       content: '';
       position: fixed;
       inset: 0;
-      z-index: -1;
+      z-index: 0;
       background: url('/static/bg.jpg') center 40% / cover no-repeat;
       filter: brightness(0.68);
     }
 
     /* ── App shell ──────────────────────────────────────────── */
     #app {
-      height: 100vh;
-      height: 100dvh; /* dynamic viewport height — excludes browser chrome on iOS */
+      height: 100%;   /* inherits from body→html→viewport, avoids 100vh iOS chrome gap */
       display: flex;
       flex-direction: column;
-      /* No overflow:hidden here — it blocks touch scroll events on iOS */
       max-width: 480px;
       margin: 0 auto;
       position: relative;
+      z-index: 1;     /* sits above body::before photo layer */
     }
 
-    /* On wider screens, show the background more naturally behind the centered app */
     @media (min-width: 480px) {
-      body::before {
-        background-position: center center;
-      }
+      body::before { background-position: center center; }
     }
 
     /* ── Header ─────────────────────────────────────────────── */
