@@ -18,7 +18,7 @@ from app.config import get_settings
 from app.database import get_db
 from app.models.check_in import CheckIn, CheckInType
 from app.models.email_verification import EmailVerification
-from app.models.employee import Employee
+from app.models.employee import CARD_NUMBER_RE, Employee
 from app.services.mailgun import send_otp_email
 
 router = APIRouter(tags=["webhook"])
@@ -27,7 +27,6 @@ logger = logging.getLogger(__name__)
 _EMAIL_RE = re.compile(r"^[\w.+-]+@([\w-]+\.)+[a-zA-Z]{2,}$")
 _ALLOWED_DOMAIN = "@aiotek.com.tw"
 _OTP_RE = re.compile(r"^\d{6}$")
-_CARD_RE = re.compile(r"^[0-9A-Za-z]{8}$")
 _MAX_OTP_ATTEMPTS = 5
 
 
@@ -84,7 +83,7 @@ async def webhook(
                 await _handle_otp_verification(db, line_user_id, text, reply_token)
             elif text.lower().startswith("query "):
                 await _handle_query(db, line_user_id, text[6:].strip(), reply_token)
-            elif _CARD_RE.match(text):
+            elif CARD_NUMBER_RE.match(text):
                 await _handle_card_number(db, line_user_id, text.upper(), reply_token)
             elif text in ("略過", "跳過", "skip"):
                 await _handle_skip(db, line_user_id, reply_token)

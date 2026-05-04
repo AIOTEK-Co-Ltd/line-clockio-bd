@@ -2,7 +2,7 @@ import asyncio
 import csv
 import hmac
 import io
-import re
+import logging
 import secrets
 from datetime import datetime
 from urllib.parse import quote, urlencode
@@ -19,13 +19,12 @@ from sqlalchemy.exc import IntegrityError
 from app.config import get_settings
 from app.database import get_db
 from app.models.check_in import CheckIn, CheckInType
-from app.models.employee import Employee
+from app.models.employee import CARD_NUMBER_RE, Employee
 from app.services.mailgun import send_invitation_email
-
-_CARD_RE = re.compile(r'^[0-9A-Za-z]{8}$')
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 templates = Jinja2Templates(directory="app/templates")
+logger = logging.getLogger(__name__)
 
 _LINE_AUTH_URL = "https://access.line.me/oauth2/v2.1/authorize"
 _LINE_TOKEN_URL = "https://api.line.me/oauth2/v2.1/token"
@@ -368,7 +367,7 @@ async def hr_import(
         raw_card = (row.get("員工卡號") or row.get("card_number") or "").strip()
         if raw_card:
             raw_card = raw_card.upper()
-            card_no = raw_card if _CARD_RE.match(raw_card) else None
+            card_no = raw_card if CARD_NUMBER_RE.match(raw_card) else None
         else:
             card_no = None
 
@@ -398,10 +397,11 @@ async def hr_import(
     # Commit all DB changes first — emails sent after so a rollback never orphans sent mail
     try:
         db.commit()
-    except IntegrityError:
+    except IntegrityError as exc:
         db.rollback()
+        logger.warning("HR import aborted — duplicate key in batch: %s", exc.orig)
         return RedirectResponse(
-            "/dashboard/employees?imported=1&created=0&updated=0&errors=1",
+            f"/dashboard/employees?imported=1&created={created}&updated={updated}&errors={errors + 1}",
             status_code=303,
         )
 

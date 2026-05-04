@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import datetime
+import re
 from typing import TYPE_CHECKING, List, Optional
+
+# Single source of truth for card number format — imported by routers and webhook
+CARD_NUMBER_RE = re.compile(r'^[0-9A-Za-z]{8}$')
 
 from sqlalchemy import String, Boolean, DateTime
 from sqlalchemy.orm import Mapped, mapped_column, relationship
