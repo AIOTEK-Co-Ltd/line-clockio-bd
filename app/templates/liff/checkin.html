@@ -97,6 +97,7 @@
       left: 0; right: 0; bottom: 0;
       overflow-y: scroll;
       -webkit-overflow-scrolling: touch;
+      touch-action: pan-y;
       padding: 16px;
       display: none;
     }
@@ -157,7 +158,7 @@
     /* ── Feature grid ────────────────────────────────────────── */
     .feature-grid {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: 1fr 1fr;
       gap: 10px;
     }
     .feature-item {
@@ -427,16 +428,6 @@
         </div>
         <div class="feature-label">補打卡</div>
       </button>
-      <button class="feature-item" onclick="showLeave()">
-        <div class="feature-icon">
-          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="3" y="4" width="18" height="18" rx="2"/>
-            <path d="M16 2v4M8 2v4M3 10h18"/>
-            <path d="M9.5 18l5-5M14.5 18l-5-5"/>
-          </svg>
-        </div>
-        <div class="feature-label">請假</div>
-      </button>
     </div>
 
     <!-- Manager section (hidden until is_manager confirmed) -->
@@ -498,17 +489,6 @@
     <div id="review-list"></div>
   </div>
 
-  <!-- ── Coming soon: leave ───────────────────────────────── -->
-  <div class="screen" id="screen-leave">
-    <div class="empty-state">
-      <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" style="opacity:.55;display:block;margin:0 auto 16px">
-        <rect x="3" y="4" width="18" height="18" rx="2"/>
-        <path d="M16 2v4M8 2v4M3 10h18"/>
-        <path d="M9.5 18l5-5M14.5 18l-5-5"/>
-      </svg>
-      請假功能<br>即將推出
-    </div>
-  </div>
 
 </div>
 
@@ -572,7 +552,6 @@
     showScreen("screen-home", "", false);
   }
   function showHome() { showScreen("screen-home", "", false); }
-  function showLeave() { showScreen("screen-leave", "請假", true); }
 
   // ── Records ────────────────────────────────────────────────
   function fmtOt(minutes) {
@@ -659,11 +638,11 @@
     const type   = document.querySelector('input[name="makeup-type"]:checked').value;
     const reason = document.getElementById("makeup-reason").value.trim();
 
-    if (!date || !time) { toast("⚠️ 請填寫日期和時間"); return; }
-    if (!reason)        { toast("⚠️ 請填寫補打卡原因"); return; }
+    if (!date || !time) { toast(`${SVG_WARN} 請填寫日期和時間`); return; }
+    if (!reason)        { toast(`${SVG_WARN} 請填寫補打卡原因`); return; }
 
     const dt = new Date(`${date}T${time}:00`);
-    if (dt > new Date()) { toast("⚠️ 補打卡時間不能是未來時間"); return; }
+    if (dt > new Date()) { toast(`${SVG_WARN} 補打卡時間不能是未來時間`); return; }
 
     const submitBtn = document.querySelector("#screen-makeup-form .submit-btn");
     if (submitBtn.disabled) return;
@@ -678,12 +657,12 @@
       });
       setLoading(false);
       submitBtn.disabled = false;
-      toast("✅ 申請已送出，等候管理員審核");
+      toast(`${SVG_OK} 申請已送出，等候管理員審核`);
       showHome();
     } catch (e) {
       setLoading(false);
       submitBtn.disabled = false;
-      toast(e.detail || "❌ 送出失敗，請重試", 3500);
+      toast(`${SVG_ERR} ${esc(e.detail||"送出失敗，請重試")}`, 3500);
     }
   }
 
@@ -731,7 +710,7 @@
       setLoading(false);
       // Remove the reviewed card
       document.getElementById(`review-card-${id}`)?.remove();
-      toast(`✅ ${data.message}`);
+      toast(`${SVG_OK} ${esc(data.message)}`);
       if (!document.querySelector(".review-card")) {
         document.getElementById("review-list").innerHTML =
           '<div class="empty-state"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" style="display:block;margin:0 auto 12px;opacity:.6"><circle cx="12" cy="12" r="10"/><path d="M8 12l3 3 5-5"/></svg>目前沒有待審核的申請</div>';
@@ -743,7 +722,7 @@
       else        { badge.textContent = n; }
     } catch (e) {
       setLoading(false);
-      toast(e.detail || "❌ 操作失敗，請重試", 3500);
+      toast(`${SVG_ERR} ${esc(e.detail||"操作失敗，請重試")}`, 3500);
     }
   }
 
@@ -763,9 +742,13 @@
   }
 
   // ── Toast ──────────────────────────────────────────────────
+  const SVG_OK  = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;margin-right:6px;flex-shrink:0"><circle cx="12" cy="12" r="10"/><path d="M8 12l3 3 5-5"/></svg>`;
+  const SVG_ERR = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;margin-right:6px;flex-shrink:0"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>`;
+  const SVG_WARN= `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;margin-right:6px;flex-shrink:0"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`;
+
   function toast(msg, duration = 2500) {
     const el = document.getElementById("toast");
-    el.textContent = msg;
+    el.innerHTML = msg;
     el.classList.add("show");
     setTimeout(() => el.classList.remove("show"), duration);
   }
@@ -805,7 +788,7 @@
       }
     } catch (e) {
       console.error("refreshStatus failed:", e);
-      toast("⚠️ 狀態載入失敗，請重新整理", 4000);
+      toast(`${SVG_WARN} 狀態載入失敗，請重新整理`, 4000);
     }
   }
 
@@ -820,7 +803,7 @@
       );
     } catch {
       setLoading(false);
-      toast("❌ 無法取得定位，請確認已開啟定位權限");
+      toast(`${SVG_ERR} 無法取得定位，請確認已開啟定位權限`);
       return;
     }
 
@@ -840,7 +823,7 @@
         document.getElementById("out-time").textContent = data.time;
         document.getElementById("btn-out").classList.add("done");
       }
-      toast(`✅ ${data.message}`);
+      toast(`${SVG_OK} ${esc(data.message)}`);
     } catch (e) {
       setLoading(false);
       const msg =
