@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     session_secret_key: str
     app_base_url: str
     timezone: str = "Asia/Taipei"
+    factory_machine_id: str = "0000000005"
 
 
 @lru_cache

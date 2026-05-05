@@ -17,7 +17,7 @@ from app.services.overtime import (
 from app.config import get_settings
 from app.database import get_db
 from app.models.check_in import CheckIn, CheckInType
-from app.models.employee import Employee
+from app.models.employee import CARD_NUMBER_RE, Employee
 from app.models.makeup_request import MakeupRequest, MakeupRequestStatus
 
 router = APIRouter(tags=["liff"])
@@ -108,7 +108,7 @@ class MakeupReviewPayload(BaseModel):
 
 class UpdateCardRequest(BaseModel):
     id_token: str
-    card_number: str = Field(..., min_length=8, max_length=8, pattern=r'^[0-9A-Za-z]{8}$')
+    card_number: str = Field(..., min_length=8, max_length=8, pattern=CARD_NUMBER_RE.pattern)
 
 
 # ── Routes ─────────────────────────────────────────────────────────────────────

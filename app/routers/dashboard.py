@@ -448,9 +448,6 @@ async def resend_invite(
 
 # ── Factory punch export ──────────────────────────────────────────────────────
 
-_FACTORY_MACHINE = "0000000005"  # office = machine 5
-
-
 @router.get("/export/factory")
 async def export_factory(
     request: Request,
@@ -472,12 +469,13 @@ async def export_factory(
         .all()
     )
 
+    machine_id = settings.factory_machine_id
     lines: list[str] = []
     for ci in check_ins:
         emp = ci.employee
         local_dt = ci.checked_at.astimezone(tz)
         lines.append(
-            f"{_FACTORY_MACHINE},"
+            f"{machine_id},"
             f"{emp.card_number},"
             f"{local_dt.strftime('%Y/%m/%d')},"
             f"{local_dt.strftime('%H:%M:%S')}"
