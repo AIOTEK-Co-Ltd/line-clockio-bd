@@ -30,6 +30,15 @@ class Settings(BaseSettings):
     timezone: str = "Asia/Taipei"
     factory_machine_id: str = "0000000005"
 
+    # Factory FTP export
+    ftp_host: str = "61.219.81.20"
+    ftp_user: str = ""
+    ftp_password: str = ""
+    ftp_remote_dir: str = "/"
+
+    # Internal job endpoint — Cloud Scheduler must send this as Bearer token
+    internal_secret: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:

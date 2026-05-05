@@ -3,7 +3,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.config import get_settings
-from app.routers import webhook, liff, dashboard
+from app.routers import webhook, liff, dashboard, jobs
 
 _settings = get_settings()
 
@@ -25,6 +25,7 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 app.include_router(webhook.router)
 app.include_router(liff.router)
 app.include_router(dashboard.router)
+app.include_router(jobs.router)
 
 
 @app.get("/health")
