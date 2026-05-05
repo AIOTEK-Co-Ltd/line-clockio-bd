@@ -83,7 +83,7 @@ async def webhook(
                 await _handle_otp_verification(db, line_user_id, text, reply_token)
             elif text.lower().startswith("query "):
                 await _handle_query(db, line_user_id, text[6:].strip(), reply_token)
-            elif CARD_NUMBER_RE.match(text):
+            elif CARD_NUMBER_RE.fullmatch(text):
                 await _handle_card_number(db, line_user_id, text.upper(), reply_token)
             elif text in ("略過", "跳過", "skip"):
                 await _handle_skip(db, line_user_id, reply_token)
@@ -282,6 +282,15 @@ async def _handle_card_number(db: Session, line_user_id: str, card_number: str, 
     ).first()
     if not employee:
         await _reply_text(reply_token, "請先完成帳號綁定後再設定卡號。")
+        return
+
+    # Already has a card number — block silent overwrite; direct to LIFF profile instead.
+    if employee.card_number:
+        await _reply_text(
+            reply_token,
+            f"您目前的員工卡號為：{employee.card_number}\n\n"
+            "如需變更卡號，請至打卡應用程式的「個人資料」頁面進行修改。",
+        )
         return
 
     conflict = db.query(Employee).filter(

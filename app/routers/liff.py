@@ -195,6 +195,7 @@ async def liff_records(
             CheckIn.checked_at >= month_start,
         )
         .order_by(CheckIn.checked_at)
+        .limit(1000)
         .all()
     )
 

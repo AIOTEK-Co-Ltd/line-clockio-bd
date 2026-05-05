@@ -367,7 +367,7 @@ async def hr_import(
         raw_card = (row.get("員工卡號") or row.get("card_number") or "").strip()
         if raw_card:
             raw_card = raw_card.upper()
-            card_no = raw_card if CARD_NUMBER_RE.match(raw_card) else None
+            card_no = raw_card if CARD_NUMBER_RE.fullmatch(raw_card) else None
         else:
             card_no = None
 
@@ -400,8 +400,10 @@ async def hr_import(
     except IntegrityError as exc:
         db.rollback()
         logger.warning("HR import aborted — duplicate key in batch: %s", exc.orig)
+        # Rollback discards the entire batch — report 0 created/updated so the
+        # manager knows nothing was written, not the pre-rollback in-memory counts.
         return RedirectResponse(
-            f"/dashboard/employees?imported=1&created={created}&updated={updated}&errors={errors + 1}",
+            f"/dashboard/employees?imported=1&created=0&updated=0&errors={errors + 1}",
             status_code=303,
         )
 
