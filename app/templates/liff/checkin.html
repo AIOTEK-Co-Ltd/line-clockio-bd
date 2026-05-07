@@ -914,7 +914,7 @@
   async function submitCardNumber() {
     const raw = document.getElementById("profile-card").value.trim().toUpperCase();
     if (!raw) { toast(`${SVG_WARN} 請輸入卡號`); return; }
-    if (!/^[0-9A-Z]{8}$/.test(raw)) { toast(`${SVG_WARN} 卡號須為 8 碼英數字`); return; }
+    if (!/^[0-9A-Z]{8}$/.test(raw)) { toast(`${SVG_WARN} 卡號須為 8 碼英數字`); return; } // keep in sync with CARD_NUMBER_RE in app/models/employee.py
 
     const btn = document.getElementById("card-save-btn");
     if (btn.disabled) return;

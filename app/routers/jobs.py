@@ -67,6 +67,8 @@ async def job_factory_export(
             f"{local_dt.strftime('%H:%M:%S')}"
         )
 
+    # Empty files are intentional — factory FTP system expects one file per day
+    # regardless of whether anyone punched in. Do not add a len(lines)==0 skip guard.
     content = ("\n".join(lines) + ("\n" if lines else "")).encode("utf-8")
     filename = f"factory_{yesterday.strftime('%Y%m%d')}.txt"
 
