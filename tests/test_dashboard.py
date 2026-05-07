@@ -126,7 +126,7 @@ def test_factory_export_line_format(client, db):
     settings = _mock_settings("0000000005")
     with patch("app.routers.dashboard._is_manager", return_value=True), \
          patch("app.routers.dashboard.get_settings", return_value=settings):
-        resp = client.get("/dashboard/export/factory")
+        resp = client.get("/dashboard/export/factory?date_from=2026-05-01&date_to=2026-05-01")
 
     lines = [ln for ln in resp.text.strip().splitlines() if ln]
     assert len(lines) == 1
@@ -150,7 +150,7 @@ def test_factory_export_uses_settings_machine_id(client, db):
     settings = _mock_settings(machine_id="9999999999")
     with patch("app.routers.dashboard._is_manager", return_value=True), \
          patch("app.routers.dashboard.get_settings", return_value=settings):
-        resp = client.get("/dashboard/export/factory")
+        resp = client.get("/dashboard/export/factory?date_from=2026-05-01&date_to=2026-05-01")
 
     assert resp.text.startswith("9999999999,")
 
@@ -188,3 +188,88 @@ def test_factory_export_empty_file_when_no_records(client, db):
 
     assert resp.status_code == 200
     assert resp.text == ""
+
+
+def test_factory_export_defaults_to_today(client, db):
+    """Without date filters, export defaults to today — old records are excluded."""
+    emp = _add_employee_with_card(db, "old@aiotek.com.tw", "D4567890")
+    old_ts = datetime(2020, 1, 1, 1, 0, 0, tzinfo=timezone.utc)
+    _add_checkin(db, emp.id, CheckInType.clock_in, old_ts)
+
+    settings = _mock_settings()
+    with patch("app.routers.dashboard._is_manager", return_value=True), \
+         patch("app.routers.dashboard.get_settings", return_value=settings):
+        resp = client.get("/dashboard/export/factory")  # no date_from / date_to
+
+    assert resp.status_code == 200
+    assert resp.text == ""  # 2020 record excluded because default is today
+
+
+# ── POST /dashboard/import — card number handling ─────────────────────────────
+
+def _hr_import_csv(rows: list[dict]) -> bytes:
+    """Build a minimal HR CSV payload from a list of row dicts."""
+    import csv, io
+    out = io.StringIO()
+    fieldnames = ["員工編號", "姓名", "Email", "員工卡號"]
+    writer = csv.DictWriter(out, fieldnames=fieldnames)
+    writer.writeheader()
+    for row in rows:
+        writer.writerow(row)
+    return out.getvalue().encode("utf-8")
+
+
+def _import(client, csv_bytes: bytes):
+    """POST to /dashboard/import patching auth and CSRF so the test focuses on import logic."""
+    with patch("app.routers.dashboard._is_manager", return_value=True), \
+         patch("app.routers.dashboard._csrf_ok", return_value=True), \
+         patch("app.routers.dashboard.send_invitation_email"):
+        return client.post(
+            "/dashboard/import",
+            files={"file": ("employees.csv", csv_bytes, "text/csv")},
+            data={"csrf_token": "test-token"},
+            follow_redirects=False,
+        )
+
+
+def test_hr_import_valid_card_stored_uppercase(client, db):
+    """Valid card number in HR import is stored in uppercase."""
+    db.execute(__import__("sqlalchemy").text("SELECT 1"))
+    csv_bytes = _hr_import_csv([
+        {"員工編號": "E001", "姓名": "Alice", "Email": "alice@aiotek.com.tw", "員工卡號": "ab123456"},
+    ])
+    resp = _import(client, csv_bytes)
+    assert resp.status_code in (302, 303)
+
+    emp = db.query(Employee).filter(Employee.email == "alice@aiotek.com.tw").first()
+    assert emp is not None
+    assert emp.card_number == "AB123456"
+
+
+def test_hr_import_invalid_card_stored_as_null(client, db):
+    """Card numbers that fail validation (bad chars) are silently set to NULL."""
+    db.execute(__import__("sqlalchemy").text("SELECT 1"))
+    csv_bytes = _hr_import_csv([
+        {"員工編號": "E002", "姓名": "Bob", "Email": "bob@aiotek.com.tw", "員工卡號": "BAD!CARD"},
+    ])
+    resp = _import(client, csv_bytes)
+    assert resp.status_code in (302, 303)
+
+    emp = db.query(Employee).filter(Employee.email == "bob@aiotek.com.tw").first()
+    assert emp is not None
+    assert emp.card_number is None
+
+
+def test_hr_import_duplicate_card_in_batch_triggers_rollback(client, db):
+    """Two rows with the same card number in one CSV cause a full rollback — redirect reports errors=1, created=0."""
+    db.execute(__import__("sqlalchemy").text("SELECT 1"))
+    csv_bytes = _hr_import_csv([
+        {"員工編號": "E003", "姓名": "Carol", "Email": "carol@aiotek.com.tw", "員工卡號": "SAME1234"},
+        {"員工編號": "E004", "姓名": "Dave",  "Email": "dave@aiotek.com.tw",  "員工卡號": "SAME1234"},
+    ])
+    resp = _import(client, csv_bytes)
+    assert resp.status_code in (302, 303)
+    # Rollback path: redirect reports 0 created and 1 error
+    location = resp.headers["location"]
+    assert "created=0" in location
+    assert "errors=1" in location

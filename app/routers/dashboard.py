@@ -462,6 +462,11 @@ async def export_factory(
     settings = get_settings()
     tz = ZoneInfo(settings.timezone)
 
+    # Default to today when no date range is provided to prevent accidental full-DB dumps.
+    today = datetime.now(tz).strftime("%Y-%m-%d")
+    date_from = date_from or today
+    date_to = date_to or today
+
     check_ins = (
         _build_checkin_query(db, tz, employee_id, date_from, date_to)
         .filter(Employee.card_number.isnot(None))
