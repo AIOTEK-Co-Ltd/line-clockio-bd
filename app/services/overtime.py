@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from app.models.check_in import CheckIn
 
 # ── 勞基法常數（法規修改時只改這個區塊）─────────────────────
+LUNCH_DEDUCTION_MINUTES = 60  # 工廠打卡機自動扣除午休 1 小時
 REGULAR_WORK_MINUTES = 480   # 正常工時 8 小時
 OT_UNIT_MINUTES = 30         # 最小加班單位（不足 30 分鐘不計）
 OT_TIER1_CAP_MINUTES = 120   # 加班第一段上限（第 1–2 小時，勞基法第 24 條第 1 款）
@@ -65,7 +66,8 @@ def compute_daily_summary(day: date, records: Sequence[CheckIn]) -> DailyWorkSum
             exceeds_legal_limit=False,
         )
 
-    work_minutes = int((last_out - first_in).total_seconds() // 60)
+    gross_minutes = int((last_out - first_in).total_seconds() // 60)
+    work_minutes = max(gross_minutes - LUNCH_DEDUCTION_MINUTES, 0)
     regular_minutes = min(work_minutes, REGULAR_WORK_MINUTES)
 
     ot_raw = max(work_minutes - REGULAR_WORK_MINUTES, 0)

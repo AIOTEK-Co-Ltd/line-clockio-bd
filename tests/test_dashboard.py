@@ -209,7 +209,8 @@ def test_factory_export_defaults_to_today(client, db):
 
 def _hr_import_csv(rows: list[dict]) -> bytes:
     """Build a minimal HR CSV payload from a list of row dicts."""
-    import csv, io
+    import csv
+    import io
     out = io.StringIO()
     fieldnames = ["員工編號", "姓名", "Email", "員工卡號"]
     writer = csv.DictWriter(out, fieldnames=fieldnames)
