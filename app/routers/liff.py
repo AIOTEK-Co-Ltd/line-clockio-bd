@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -8,6 +9,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
+from app.services.checkin_query import build_checkin_query
+from app.services.ftp_export import build_factory_lines, upload_factory_file
 from app.services.overtime import (
     MONTHLY_OT_LIMIT,
     compute_monthly_summaries,
@@ -19,6 +22,8 @@ from app.database import get_db
 from app.models.check_in import CheckIn, CheckInType
 from app.models.employee import CARD_NUMBER_RE, Employee
 from app.models.makeup_request import MakeupRequest, MakeupRequestStatus
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["liff"])
 templates = Jinja2Templates(directory="app/templates")
@@ -445,6 +450,10 @@ async def liff_makeup_review(
     if updated == 0:
         raise HTTPException(status_code=409, detail="此申請已被其他管理員審核。")
 
+    # Capture before commit — commit expires session objects and re-accessing
+    # target.requested_at afterwards would trigger an unwanted lazy-load.
+    makeup_dt = target.requested_at if payload.action == "approve" else None
+
     if payload.action == "approve":
         # Insert the attendance record at the employee's requested timestamp.
         # This intentionally bypasses the normal 2-hour duplicate guard — manager
@@ -452,7 +461,7 @@ async def liff_makeup_review(
         db.add(CheckIn(
             employee_id=target.employee_id,
             type=target.type,
-            checked_at=target.requested_at,
+            checked_at=makeup_dt,
             latitude=0.0,
             longitude=0.0,
             ip_address="makeup:approved",
@@ -462,7 +471,47 @@ async def liff_makeup_review(
         msg = "已拒絕補打卡申請。"
 
     db.commit()
+
+    if makeup_dt is not None:
+        _try_supplemental_ftp_export(db, makeup_dt)
+
     return {"success": True, "message": msg}
+
+
+def _try_supplemental_ftp_export(db: Session, punch_dt: datetime) -> None:
+    """Upload a corrected factory file for the makeup punch date.
+
+    Called after a makeup approval so past-date punches reach the factory
+    punch machine under the correct date rather than the current nightly file.
+    Errors are logged but never propagate — approval is already committed.
+    """
+    settings = get_settings()
+    if not settings.ftp_host or not settings.ftp_user:
+        return
+    try:
+        tz = ZoneInfo(settings.timezone)
+        local_date = punch_dt.astimezone(tz).date()
+        date_str = local_date.strftime("%Y-%m-%d")
+        check_ins = (
+            build_checkin_query(db, tz, employee_id=None, date_from=date_str, date_to=date_str)
+            .filter(Employee.card_number.isnot(None))
+            .order_by(CheckIn.checked_at.asc())
+            .all()
+        )
+        lines = build_factory_lines(check_ins, settings.factory_machine_id, tz)
+        content = ("\n".join(lines) + ("\n" if lines else "")).encode("utf-8")
+        filename = f"factory_{local_date.strftime('%Y%m%d')}.txt"
+        upload_factory_file(
+            host=settings.ftp_host,
+            user=settings.ftp_user,
+            password=settings.ftp_password,
+            remote_dir=settings.ftp_remote_dir,
+            filename=filename,
+            content=content,
+        )
+        logger.info("Supplemental FTP export: %s (%d records)", filename, len(lines))
+    except Exception:
+        logger.exception("Supplemental FTP export failed for %s — approval was not rolled back", punch_dt)
 
 
 # ── Card number ────────────────────────────────────────────────────────────────

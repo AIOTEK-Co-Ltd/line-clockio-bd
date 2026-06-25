@@ -155,6 +155,8 @@ def _mock_settings_liff(tz: str = "Asia/Taipei") -> MagicMock:
     s.timezone = tz
     s.liff_channel_id = "test-liff-channel-id"
     s.liff_enabled = True
+    s.ftp_host = ""   # FTP disabled by default — prevents supplemental upload in most tests
+    s.ftp_user = ""
     return s
 
 
@@ -706,3 +708,113 @@ def test_update_card_status_includes_card_number(client, db):
 
     assert resp.status_code == 200
     assert resp.json()["card_number"] == "CARD1234"
+
+
+# ── Makeup approval: supplemental FTP export ──────────────────────────────────
+
+def _mock_settings_with_ftp(tz: str = "Asia/Taipei") -> MagicMock:
+    s = _mock_settings_liff(tz)
+    s.ftp_host = "61.219.81.20"
+    s.ftp_user = "testuser"
+    s.ftp_password = "testpass"
+    s.ftp_remote_dir = "/"
+    s.factory_machine_id = "0000000005"
+    return s
+
+
+def _add_employee_with_card(db, card: str = "AB123456") -> Employee:
+    emp = Employee(
+        email="ftp@aiotek.com.tw",
+        line_user_id=LINE_UID,
+        display_name="FTP Employee",
+        card_number=card,
+        is_active=True,
+        is_manager=True,
+    )
+    db.add(emp)
+    db.commit()
+    db.refresh(emp)
+    return emp
+
+
+def test_makeup_approve_triggers_supplemental_ftp_export(client, db):
+    """Approving a makeup punch for a past date uploads a factory file for that date."""
+    from zoneinfo import ZoneInfo
+    emp = _add_employee_with_card(db)
+
+    tz = ZoneInfo("Asia/Taipei")
+    past_dt = datetime(2026, 6, 16, 8, 40, 0, tzinfo=tz)  # 6/16 08:40 local
+
+    req = MakeupRequest(
+        employee_id=emp.id,
+        type=CheckInType.clock_in,
+        requested_at=past_dt.astimezone(timezone.utc),
+        reason="忘記打卡",
+        status=MakeupRequestStatus.pending,
+    )
+    db.add(req)
+    db.commit()
+    db.refresh(req)
+
+    settings = _mock_settings_with_ftp()
+
+    # Mock build_checkin_query so _try_supplemental_ftp_export doesn't hit the
+    # in-memory SQLite after commit (which would open a fresh, table-less connection).
+    mock_query = MagicMock()
+    mock_query.filter.return_value.order_by.return_value.all.return_value = []
+
+    with patch("app.routers.liff.get_settings", return_value=settings), \
+         patch("app.routers.liff._verify_line_token", new_callable=AsyncMock, return_value=LINE_UID), \
+         patch("app.routers.liff.build_checkin_query", return_value=mock_query), \
+         patch("app.routers.liff.upload_factory_file") as mock_upload:
+        resp = client.post("/liff/makeup/review", json={
+            "id_token": "tok",
+            "request_id": req.id,
+            "action": "approve",
+        })
+
+    assert resp.status_code == 200
+    mock_upload.assert_called_once()
+    assert mock_upload.call_args[1]["filename"] == "factory_20260616.txt"
+
+
+def test_makeup_approve_ftp_failure_does_not_break_approval(client, db):
+    """FTP upload failure after makeup approval is logged but does not roll back the approval."""
+    from zoneinfo import ZoneInfo
+    emp = _add_employee_with_card(db, card="CD789012")
+
+    tz = ZoneInfo("Asia/Taipei")
+    past_dt = datetime(2026, 6, 10, 9, 0, 0, tzinfo=tz)
+
+    req = MakeupRequest(
+        employee_id=emp.id,
+        type=CheckInType.clock_in,
+        requested_at=past_dt.astimezone(timezone.utc),
+        reason="補打卡",
+        status=MakeupRequestStatus.pending,
+    )
+    db.add(req)
+    db.commit()
+    db.refresh(req)
+
+    mock_query = MagicMock()
+    mock_query.filter.return_value.order_by.return_value.all.return_value = []
+
+    settings = _mock_settings_with_ftp()
+
+    with patch("app.routers.liff.get_settings", return_value=settings), \
+         patch("app.routers.liff._verify_line_token", new_callable=AsyncMock, return_value=LINE_UID), \
+         patch("app.routers.liff.build_checkin_query", return_value=mock_query), \
+         patch("app.routers.liff.upload_factory_file", side_effect=Exception("FTP down")):
+        resp = client.post("/liff/makeup/review", json={
+            "id_token": "tok",
+            "request_id": req.id,
+            "action": "approve",
+        })
+
+    # Approval must succeed even when FTP is down
+    assert resp.status_code == 200
+    assert resp.json()["success"] is True
+    db.expire_all()
+    checkin = db.query(CheckIn).filter_by(employee_id=emp.id, ip_address="makeup:approved").first()
+    assert checkin is not None
