@@ -634,6 +634,258 @@ def test_makeup_day_status_503_when_liff_not_configured(client):
 
 # ── POST /liff/makeup/pending ─────────────────────────────────────────────────
 
+def _review_payload(db, request, tz="Asia/Taipei"):
+    requested_at = request.requested_at
+    if requested_at.tzinfo is None:
+        requested_at = requested_at.replace(tzinfo=timezone.utc)
+    current = assess_makeup_day(
+        db, request.employee_id, requested_at.astimezone(ZoneInfo(tz)).date(), ZoneInfo(tz),
+    )
+    return {
+        "id_token": "tok", "request_id": request.id, "action": "approve",
+        "observed_day_state": current.state.value,
+        "observed_snapshot_token": current.snapshot_token,
+        "exception_confirmed": False,
+    }
+
+
+def _save_review_audit(db, request, tz="Asia/Taipei"):
+    payload = _review_payload(db, request, tz)
+    request.day_state_at_submission = payload["observed_day_state"]
+    request.snapshot_token_at_submission = payload["observed_snapshot_token"]
+    db.commit()
+    db.refresh(request)
+    return payload
+
+
+def _add_review_request(db, employee_id, request_type=CheckInType.clock_in):
+    request = MakeupRequest(
+        employee_id=employee_id, type=request_type,
+        requested_at=datetime(2026, 8, 26, 1, tzinfo=timezone.utc),
+        reason="補打卡", status=MakeupRequestStatus.pending,
+    )
+    db.add(request)
+    db.commit()
+    db.refresh(request)
+    return request
+
+
+def test_makeup_pending_returns_audit_and_current_day_status(client, db):
+    manager = _add_employee(db)
+    manager.is_manager = True
+    _add_checkin(db, manager.id, CheckInType.clock_in,
+                 datetime(2026, 8, 26, 1, 25, tzinfo=timezone.utc))
+    request = _add_review_request(db, manager.id)
+    request.system_suggested_type = CheckInType.clock_out
+    request.exception_confirmed = True
+    payload = _save_review_audit(db, request)
+
+    response = _post_makeup(client, {"id_token": "tok"}, "pending")
+
+    assert response.status_code == 200
+    item = response.json()["requests"][0]
+    assert item["day_state_at_submission"] == "missing_clock_out"
+    assert item["snapshot_token_at_submission"] == payload["observed_snapshot_token"]
+    assert item["system_suggested_type"] == "clock_out"
+    assert item["exception_confirmed"] is True
+    assert item["current_day_status"]["state"] == "missing_clock_out"
+    assert item["current_day_status"]["records"] == [
+        {"type": "clock_in", "type_label": "上班", "time": "09:25"},
+    ]
+    assert item["records_changed_since_submission"] is False
+
+
+@pytest.mark.parametrize("tz", ["Asia/Taipei", "America/New_York"])
+def test_makeup_pending_uses_each_employee_local_date_and_nullable_audit(client, db, tz):
+    manager = _add_employee(db)
+    manager.is_manager = True
+    other = Employee(email="other@aiotek.com.tw", is_active=True)
+    db.add(other)
+    db.commit()
+    first = _add_review_request(db, manager.id)
+    second = _add_review_request(db, other.id)
+    second.requested_at = datetime(2026, 8, 26, 18, tzinfo=timezone.utc)
+    db.commit()
+    _add_checkin(db, manager.id, CheckInType.clock_in,
+                 datetime(2026, 8, 25, 23, tzinfo=timezone.utc))
+    _add_checkin(db, other.id, CheckInType.clock_out,
+                 datetime(2026, 8, 26, 19, tzinfo=timezone.utc))
+    first_id, second_id = first.id, second.id
+
+    response = _post_makeup(client, {"id_token": "tok"}, "pending", tz=tz)
+
+    assert response.status_code == 200
+    items = {item["id"]: item for item in response.json()["requests"]}
+    assert items[first_id]["current_day_status"]["state"] == "missing_clock_out"
+    assert items[second_id]["current_day_status"]["state"] == "missing_clock_in"
+    for item in items.values():
+        assert item["day_state_at_submission"] is None
+        assert item["snapshot_token_at_submission"] is None
+        assert item["system_suggested_type"] is None
+        assert item["records_changed_since_submission"] is None
+
+
+def test_makeup_review_requires_second_confirmation_for_exception(client, db):
+    manager = _add_employee(db)
+    manager.is_manager = True
+    _add_checkin(db, manager.id, CheckInType.clock_in,
+                 datetime(2026, 8, 26, 1, 25, tzinfo=timezone.utc))
+    request = _add_review_request(db, manager.id)
+    request.exception_confirmed = True
+    payload = _save_review_audit(db, request)
+
+    response = _post_makeup(client, payload, "review")
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "exception_confirmation_required"
+    assert db.query(CheckIn).filter_by(ip_address="makeup:approved").count() == 0
+    assert db.get(MakeupRequest, request.id).status == MakeupRequestStatus.pending
+    payload["exception_confirmed"] = True
+    confirmed = _post_makeup(client, payload, "review")
+    assert confirmed.status_code == 200
+    assert db.query(CheckIn).filter_by(ip_address="makeup:approved").count() == 1
+
+
+@pytest.mark.parametrize("missing_audit", ["both", "state", "snapshot"])
+def test_makeup_review_requires_confirmation_for_legacy_request(client, db, missing_audit):
+    manager = _add_employee(db)
+    manager.is_manager = True
+    request = _add_review_request(db, manager.id)
+    payload = _save_review_audit(db, request)
+    if missing_audit in ("both", "state"):
+        request.day_state_at_submission = None
+    if missing_audit in ("both", "snapshot"):
+        request.snapshot_token_at_submission = None
+    db.commit()
+    db.refresh(request)
+
+    response = _post_makeup(client, payload, "review")
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "exception_confirmation_required"
+    assert db.query(CheckIn).count() == 0
+    payload["exception_confirmed"] = True
+    assert _post_makeup(client, payload, "review").status_code == 200
+
+
+@pytest.mark.parametrize("change", ["state", "snapshot"])
+def test_makeup_review_rejects_stale_day_state(client, db, change):
+    manager = _add_employee(db)
+    manager.is_manager = True
+    punch = _add_checkin(db, manager.id, CheckInType.clock_in,
+                         datetime(2026, 8, 26, 1, 25, tzinfo=timezone.utc))
+    request = _add_review_request(db, manager.id, CheckInType.clock_out)
+    payload = _save_review_audit(db, request)
+    if change == "state":
+        _add_checkin(db, manager.id, CheckInType.clock_out,
+                     datetime(2026, 8, 26, 9, 30, tzinfo=timezone.utc))
+    else:
+        punch.checked_at = datetime(2026, 8, 26, 1, 30, tzinfo=timezone.utc)
+        db.commit()
+        db.refresh(request)
+    current_payload = _review_payload(db, request)
+    payload["exception_confirmed"] = True
+
+    response = _post_makeup(client, payload, "review")
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["code"] == "stale_day_state"
+    assert isinstance(detail["message"], str)
+    assert detail["day_status"]["snapshot_token"] == current_payload["observed_snapshot_token"]
+    assert db.query(CheckIn).filter_by(ip_address="makeup:approved").count() == 0
+    assert db.get(MakeupRequest, request.id).status == MakeupRequestStatus.pending
+
+
+@pytest.mark.parametrize("same_state", [False, True])
+def test_makeup_review_submission_change_requires_confirmation(client, db, same_state):
+    manager = _add_employee(db)
+    manager.is_manager = True
+    _add_checkin(db, manager.id, CheckInType.clock_in,
+                 datetime(2026, 8, 26, 1, tzinfo=timezone.utc))
+    if same_state:
+        _add_checkin(db, manager.id, CheckInType.clock_in,
+                     datetime(2026, 8, 26, 2, tzinfo=timezone.utc))
+    request = _add_review_request(db, manager.id, CheckInType.clock_out)
+    _save_review_audit(db, request)
+    _add_checkin(db, manager.id, CheckInType.clock_out,
+                 datetime(2026, 8, 26, 9, tzinfo=timezone.utc))
+    payload = _review_payload(db, request)
+    assert (request.day_state_at_submission == payload["observed_day_state"]) is same_state
+
+    pending = _post_makeup(client, {"id_token": "tok"}, "pending")
+    assert pending.json()["requests"][0]["records_changed_since_submission"] is True
+    response = _post_makeup(client, payload, "review")
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "exception_confirmation_required"
+    assert db.query(CheckIn).filter_by(ip_address="makeup:approved").count() == 0
+
+
+@pytest.mark.parametrize("missing", ["both", "observed_day_state", "observed_snapshot_token"])
+def test_makeup_review_old_manager_page_requires_refresh(client, db, missing):
+    manager = _add_employee(db)
+    manager.is_manager = True
+    request = _add_review_request(db, manager.id)
+    payload = _save_review_audit(db, request)
+    for field in ("observed_day_state", "observed_snapshot_token"):
+        if missing in ("both", field):
+            payload.pop(field)
+
+    response = _post_makeup(client, payload, "review")
+
+    assert response.status_code == 409
+    assert isinstance(response.json()["detail"], str)
+    assert "重新開啟" in response.json()["detail"]
+    assert db.query(CheckIn).count() == 0
+    payload["action"] = "reject"
+    assert _post_makeup(client, payload, "review").status_code == 200
+
+
+@pytest.mark.parametrize("cause", ["employee_exception", "snapshot_changed", "state_changed", "wrong_type"])
+def test_makeup_review_confirmation_gates_are_independent(client, db, cause):
+    manager = _add_employee(db)
+    manager.is_manager = True
+    punch = _add_checkin(db, manager.id, CheckInType.clock_in,
+                         datetime(2026, 8, 26, 1, tzinfo=timezone.utc))
+    request = _add_review_request(db, manager.id, CheckInType.clock_out)
+    _save_review_audit(db, request)
+    if cause == "employee_exception":
+        request.exception_confirmed = True
+    elif cause == "snapshot_changed":
+        punch.checked_at = datetime(2026, 8, 26, 2, tzinfo=timezone.utc)
+    elif cause == "state_changed":
+        request.day_state_at_submission = "no_records"
+    else:
+        request.type = CheckInType.clock_in
+    db.commit()
+    db.refresh(request)
+    payload = _review_payload(db, request)
+
+    response = _post_makeup(client, payload, "review")
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "exception_confirmation_required"
+    assert db.query(CheckIn).filter_by(ip_address="makeup:approved").count() == 0
+    payload["exception_confirmed"] = True
+    assert _post_makeup(client, payload, "review").status_code == 200
+
+
+@pytest.mark.parametrize("tz", ["Asia/Taipei", "America/New_York"])
+def test_makeup_review_uses_request_local_date(client, db, tz):
+    manager = _add_employee(db)
+    manager.is_manager = True
+    _add_checkin(db, manager.id, CheckInType.clock_in,
+                 datetime(2026, 8, 25, 23, tzinfo=timezone.utc))
+    request = _add_review_request(db, manager.id, CheckInType.clock_out)
+    payload = _save_review_audit(db, request, tz)
+    assert payload["observed_day_state"] == "missing_clock_out"
+
+    response = _post_makeup(client, payload, "review", tz=tz)
+
+    assert response.status_code == 200
+    assert db.query(CheckIn).filter_by(ip_address="makeup:approved").count() == 1
+
+
 def test_makeup_pending_requires_manager(client, db):
     """Non-manager employees cannot access the pending list."""
     _add_employee(db)
@@ -695,16 +947,13 @@ def test_makeup_review_approve_creates_checkin(client, db):
     db.commit()
     db.refresh(req)
     req_id = req.id
+    payload = _save_review_audit(db, req)
 
     settings = _mock_settings_liff()
 
     with patch("app.routers.liff.get_settings", return_value=settings), \
          patch("app.routers.liff._verify_line_token", new_callable=AsyncMock, return_value=LINE_UID):
-        resp = client.post("/liff/makeup/review", json={
-            "id_token": "tok",
-            "request_id": req_id,
-            "action": "approve",
-        })
+        resp = client.post("/liff/makeup/review", json=payload)
 
     assert resp.status_code == 200
     assert resp.json()["success"] is True
@@ -717,6 +966,8 @@ def test_makeup_review_approve_creates_checkin(client, db):
     checkin = db.query(CheckIn).filter_by(employee_id=emp.id).first()
     assert checkin is not None
     assert checkin.ip_address == "makeup:approved"
+    assert checkin.latitude == 0.0
+    assert checkin.longitude == 0.0
 
 
 def test_makeup_review_reject_does_not_create_checkin(client, db):
@@ -787,14 +1038,13 @@ def test_makeup_review_concurrent_approve_returns_409(client, db):
     db.commit()
     db.refresh(req)
     req_id = req.id
+    payload = _save_review_audit(db, req)
 
     settings = _mock_settings_liff()
 
     with patch("app.routers.liff.get_settings", return_value=settings), \
          patch("app.routers.liff._verify_line_token", new_callable=AsyncMock, return_value=LINE_UID):
-        resp1 = client.post("/liff/makeup/review", json={
-            "id_token": "tok", "request_id": req_id, "action": "approve",
-        })
+        resp1 = client.post("/liff/makeup/review", json=payload)
         assert resp1.status_code == 200
 
         # Re-anchor the SQLite in-memory session before the second call
@@ -805,9 +1055,7 @@ def test_makeup_review_concurrent_approve_returns_409(client, db):
         # Sequential test: pre-fetch finds status=approved → 404.
         # True concurrent race: atomic UPDATE returns 0 → 409.
         # Either way the request must NOT produce a second CheckIn.
-        resp2 = client.post("/liff/makeup/review", json={
-            "id_token": "tok", "request_id": req_id, "action": "approve",
-        })
+        resp2 = client.post("/liff/makeup/review", json=payload)
         assert resp2.status_code in (404, 409)
 
     # Exactly one CheckIn was created despite two approve attempts
@@ -977,6 +1225,7 @@ def test_makeup_approve_triggers_supplemental_ftp_export(client, db):
     db.add(req)
     db.commit()
     db.refresh(req)
+    payload = _save_review_audit(db, req)
 
     settings = _mock_settings_with_ftp()
 
@@ -985,19 +1234,26 @@ def test_makeup_approve_triggers_supplemental_ftp_export(client, db):
     mock_query = MagicMock()
     mock_query.filter.return_value.order_by.return_value.all.return_value = []
 
+    upload_observations = []
+
+    def check_commit_before_upload(**kwargs):
+        upload_observations.append((mock_commit.call_count, not db.new))
+
     with patch("app.routers.liff.get_settings", return_value=settings), \
          patch("app.routers.liff._verify_line_token", new_callable=AsyncMock, return_value=LINE_UID), \
          patch("app.routers.liff.build_checkin_query", return_value=mock_query), \
-         patch("app.routers.liff.upload_factory_file") as mock_upload:
-        resp = client.post("/liff/makeup/review", json={
-            "id_token": "tok",
-            "request_id": req.id,
-            "action": "approve",
-        })
+         patch.object(db, "commit", wraps=db.commit) as mock_commit, \
+         patch("app.routers.liff.upload_factory_file", side_effect=check_commit_before_upload) as mock_upload:
+        resp = client.post("/liff/makeup/review", json=payload)
 
     assert resp.status_code == 200
     mock_upload.assert_called_once()
+    assert upload_observations == [(1, True)]
     assert mock_upload.call_args[1]["filename"] == "factory_20260616.txt"
+    assert mock_upload.call_args[1]["content"] == b""
+    db.expire_all()
+    assert db.get(MakeupRequest, payload["request_id"]).status == MakeupRequestStatus.approved
+    assert db.query(CheckIn).filter_by(ip_address="makeup:approved").count() == 1
 
 
 def test_makeup_approve_ftp_failure_does_not_break_approval(client, db):
@@ -1018,6 +1274,7 @@ def test_makeup_approve_ftp_failure_does_not_break_approval(client, db):
     db.add(req)
     db.commit()
     db.refresh(req)
+    payload = _save_review_audit(db, req)
 
     mock_query = MagicMock()
     mock_query.filter.return_value.order_by.return_value.all.return_value = []
@@ -1027,16 +1284,16 @@ def test_makeup_approve_ftp_failure_does_not_break_approval(client, db):
     with patch("app.routers.liff.get_settings", return_value=settings), \
          patch("app.routers.liff._verify_line_token", new_callable=AsyncMock, return_value=LINE_UID), \
          patch("app.routers.liff.build_checkin_query", return_value=mock_query), \
-         patch("app.routers.liff.upload_factory_file", side_effect=Exception("FTP down")):
-        resp = client.post("/liff/makeup/review", json={
-            "id_token": "tok",
-            "request_id": req.id,
-            "action": "approve",
-        })
+         patch("app.routers.liff.upload_factory_file", side_effect=Exception("FTP down")) as mock_upload, \
+         patch.object(db, "rollback", wraps=db.rollback) as mock_rollback:
+        resp = client.post("/liff/makeup/review", json=payload)
 
     # Approval must succeed even when FTP is down
     assert resp.status_code == 200
     assert resp.json()["success"] is True
+    mock_upload.assert_called_once()
+    mock_rollback.assert_not_called()
     db.expire_all()
+    assert db.get(MakeupRequest, payload["request_id"]).status == MakeupRequestStatus.approved
     checkin = db.query(CheckIn).filter_by(employee_id=emp.id, ip_address="makeup:approved").first()
     assert checkin is not None

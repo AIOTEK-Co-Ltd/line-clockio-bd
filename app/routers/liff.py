@@ -128,6 +128,11 @@ class MakeupReviewPayload(BaseModel):
     id_token: str
     request_id: int
     action: str  # "approve" or "reject"
+    observed_day_state: MakeupDayState | None = None
+    observed_snapshot_token: str | None = Field(
+        default=None, pattern=r"^sha256:[0-9a-f]{64}$",
+    )
+    exception_confirmed: bool = False
 
 
 class UpdateCardRequest(BaseModel):
@@ -381,6 +386,42 @@ def _raise_makeup_conflict(
     })
 
 
+def _serialize_pending_makeup_request(
+    db: Session,
+    request: MakeupRequest,
+    tz: ZoneInfo,
+) -> dict[str, object]:
+    """Include submission audit and the employee's current local-day assessment."""
+    requested_at = request.requested_at
+    # SQLite returns naive UTC values for timezone-aware columns.
+    if requested_at.tzinfo is None:
+        requested_at = requested_at.replace(tzinfo=timezone.utc)
+    assessment = assess_makeup_day(
+        db, request.employee_id, requested_at.astimezone(tz).date(), tz,
+    )
+    return {
+        "id": request.id,
+        "employee_name": (
+            request.employee.display_name or request.employee.full_name or request.employee.email
+        ),
+        "type": request.type.value,
+        "type_label": "上班" if request.type == CheckInType.clock_in else "下班",
+        "requested_at": requested_at.astimezone(tz).strftime("%m/%d %H:%M"),
+        "reason": request.reason,
+        "day_state_at_submission": request.day_state_at_submission,
+        "snapshot_token_at_submission": request.snapshot_token_at_submission,
+        "system_suggested_type": (
+            request.system_suggested_type.value if request.system_suggested_type else None
+        ),
+        "exception_confirmed": request.exception_confirmed,
+        "current_day_status": _serialize_makeup_day(assessment, tz),
+        "records_changed_since_submission": (
+            None if request.snapshot_token_at_submission is None
+            else request.snapshot_token_at_submission != assessment.snapshot_token
+        ),
+    }
+
+
 @router.post("/liff/makeup/day-status")
 async def liff_makeup_day_status(
     payload: MakeupDayStatusRequest,
@@ -491,8 +532,8 @@ async def liff_makeup_pending(
     payload: TokenRequest,
     db: Session = Depends(get_db),
     _: None = Depends(_require_liff),
-):
-    """Manager: list all pending makeup punch requests."""
+) -> dict[str, object]:
+    """Manager: list pending requests with audit and current local-day status."""
     settings = get_settings()
     line_user_id = await _verify_line_token(payload.id_token, settings.liff_channel_id)
     _get_manager(db, line_user_id)  # raises 403 if not manager
@@ -508,17 +549,7 @@ async def liff_makeup_pending(
 
     return {
         "requests": [
-            {
-                "id": r.id,
-                "employee_name": (
-                    r.employee.display_name or r.employee.full_name or r.employee.email
-                ),
-                "type": r.type.value,
-                "type_label": "上班" if r.type == CheckInType.clock_in else "下班",
-                "requested_at": r.requested_at.astimezone(tz).strftime("%m/%d %H:%M"),
-                "reason": r.reason,
-            }
-            for r in requests
+            _serialize_pending_makeup_request(db, request, tz) for request in requests
         ]
     }
 
@@ -528,8 +559,8 @@ async def liff_makeup_review(
     payload: MakeupReviewPayload,
     db: Session = Depends(get_db),
     _: None = Depends(_require_liff),
-):
-    """Manager: approve or reject a pending makeup punch request."""
+) -> dict[str, object]:
+    """Manager: revalidate approvals or reject a pending makeup request."""
     settings = get_settings()
     line_user_id = await _verify_line_token(payload.id_token, settings.liff_channel_id)
     manager = _get_manager(db, line_user_id)
@@ -550,6 +581,39 @@ async def liff_makeup_review(
     )
     if not target:
         raise HTTPException(status_code=404, detail="Pending request not found.")
+
+    if payload.action == "approve":
+        if payload.observed_day_state is None or payload.observed_snapshot_token is None:
+            raise HTTPException(
+                status_code=409, detail="系統已更新，請關閉並重新開啟打卡頁面。",
+            )
+        tz = ZoneInfo(settings.timezone)
+        requested_at = target.requested_at
+        if requested_at.tzinfo is None:
+            requested_at = requested_at.replace(tzinfo=timezone.utc)
+        current = assess_makeup_day(
+            db, target.employee_id, requested_at.astimezone(tz).date(), tz,
+        )
+        if (
+            payload.observed_day_state != current.state
+            or payload.observed_snapshot_token != current.snapshot_token
+        ):
+            _raise_makeup_conflict(
+                "stale_day_state", "當日打卡紀錄已更新，請重新檢查後再核准。", current, tz,
+            )
+        needs_manager_confirmation = (
+            target.day_state_at_submission is None
+            or target.snapshot_token_at_submission is None
+            or target.exception_confirmed
+            or target.day_state_at_submission != current.state.value
+            or target.snapshot_token_at_submission != current.snapshot_token
+            or requires_exception_confirmation(current, target.type)
+        )
+        if needs_manager_confirmation and not payload.exception_confirmed:
+            _raise_makeup_conflict(
+                "exception_confirmation_required",
+                "此申請與目前打卡紀錄不一致，請確認後再核准。", current, tz,
+            )
 
     new_status = (
         MakeupRequestStatus.approved if payload.action == "approve"
