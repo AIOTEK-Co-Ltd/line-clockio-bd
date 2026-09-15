@@ -5,6 +5,7 @@ import pytest
 
 from app.models.check_in import CheckIn, CheckInType
 from app.models.employee import Employee
+from app.models.makeup_request import MakeupRequest, MakeupRequestStatus
 from app.services.makeup_validation import (
     MakeupDayState,
     assess_makeup_day,
@@ -38,6 +39,29 @@ def _punch(db, employee_id: int, punch_type: CheckInType, local_time: str) -> No
         )
     )
     db.commit()
+
+
+def test_makeup_request_persists_guidance_audit(db):
+    employee = _employee(db)
+    request = MakeupRequest(
+        employee_id=employee.id,
+        type=CheckInType.clock_in,
+        requested_at=datetime(2026, 8, 26, 1, 0, tzinfo=timezone.utc),
+        reason="確認例外",
+        status=MakeupRequestStatus.pending,
+        day_state_at_submission=MakeupDayState.missing_clock_out.value,
+        snapshot_token_at_submission="sha256:test-snapshot",
+        system_suggested_type=CheckInType.clock_out,
+        exception_confirmed=True,
+    )
+    db.add(request)
+    db.commit()
+    db.refresh(request)
+
+    assert request.day_state_at_submission == "missing_clock_out"
+    assert request.snapshot_token_at_submission == "sha256:test-snapshot"
+    assert request.system_suggested_type == CheckInType.clock_out
+    assert request.exception_confirmed is True
 
 
 @pytest.mark.parametrize(
