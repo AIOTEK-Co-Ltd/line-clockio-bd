@@ -326,6 +326,23 @@ async def liff_checkin(
 
 # ── Makeup punch endpoints ─────────────────────────────────────────────────────
 
+def _makeup_time_utc(local_date: date, local_time: time, tz: ZoneInfo) -> datetime:
+    """Convert a unique local time to UTC, rejecting DST gaps and folds."""
+    requested_local = datetime.combine(local_date, local_time, tzinfo=tz)
+    requested_utc = requested_local.astimezone(timezone.utc)
+    if requested_utc.astimezone(tz) != requested_local:
+        raise HTTPException(
+            status_code=422,
+            detail=f"補打卡時間在 {tz.key} 因時區調整而不存在，請選擇其他時間。",
+        )
+    if requested_local.replace(fold=1).astimezone(timezone.utc) != requested_utc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"補打卡時間在 {tz.key} 因時區調整而重複，無法確認實際時間，請選擇其他時間。",
+        )
+    return requested_utc
+
+
 def _serialize_makeup_day(
     assessment: MakeupDayAssessment,
     tz: ZoneInfo,
@@ -414,8 +431,7 @@ async def liff_makeup_request(
         )
     tz = ZoneInfo(settings.timezone)
     local_date = payload.requested_local_date
-    requested_local = datetime.combine(local_date, payload.requested_local_time, tzinfo=tz)
-    requested_utc = requested_local.astimezone(timezone.utc)
+    requested_utc = _makeup_time_utc(local_date, payload.requested_local_time, tz)
     if requested_utc >= datetime.now(timezone.utc):
         raise HTTPException(status_code=400, detail="補打卡時間不能是未來時間。")
 

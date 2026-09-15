@@ -559,6 +559,34 @@ def test_makeup_request_interprets_local_time_in_settings_timezone(client, db, t
     )
 
 
+def test_makeup_request_rejects_dst_gap_before_assessment(client, db):
+    """A nonexistent local time must not be normalized into another time."""
+    emp = _add_employee(db)
+    payload = _makeup_payload(db, emp.id, date(2026, 3, 8), "America/New_York")
+    payload["requested_local_time"] = "02:30"
+    with patch("app.routers.liff.assess_makeup_day", wraps=assess_makeup_day) as assess:
+        response = _post_makeup(client, payload, tz="America/New_York")
+    assert response.status_code == 422
+    assert "不存在" in response.json()["detail"]
+    assert "America/New_York" in response.json()["detail"]
+    assess.assert_not_called()
+    assert db.query(MakeupRequest).count() == 0
+
+
+def test_makeup_request_rejects_dst_fold_before_assessment(client, db):
+    """An ambiguous local time must not silently select the first instant."""
+    emp = _add_employee(db)
+    payload = _makeup_payload(db, emp.id, date(2025, 11, 2), "America/New_York")
+    payload["requested_local_time"] = "01:30"
+    with patch("app.routers.liff.assess_makeup_day", wraps=assess_makeup_day) as assess:
+        response = _post_makeup(client, payload, tz="America/New_York")
+    assert response.status_code == 422
+    assert "重複" in response.json()["detail"]
+    assert "America/New_York" in response.json()["detail"]
+    assess.assert_not_called()
+    assert db.query(MakeupRequest).count() == 0
+
+
 def test_makeup_day_status_rejects_future_date(client, db):
     _add_employee(db)
     response = _post_makeup(client, {"id_token": "tok", "date": "2099-01-01"}, "day-status")
