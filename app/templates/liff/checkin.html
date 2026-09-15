@@ -757,6 +757,7 @@
   async function loadMakeupDayStatus() {
     const date = document.getElementById("makeup-date").value;
     const requestId = ++_makeupStatusRequestId;
+    setLoading(false);
     _makeupDayStatus = null;
     selectMakeupType(null);
     updateMakeupExceptionUI();
@@ -816,6 +817,7 @@
 
     const submitBtn = document.getElementById("makeup-submit");
     if (submitBtn.disabled) return;
+    const statusRequestId = _makeupStatusRequestId;
     submitBtn.disabled = true;
     setLoading(true, "正在送出申請…");
     try {
@@ -829,11 +831,15 @@
         exception_confirmed: document.getElementById("makeup-exception-confirmed").checked,
         reason,
       });
+      if (statusRequestId !== _makeupStatusRequestId ||
+          date !== document.getElementById("makeup-date").value) return;
       setLoading(false);
       submitBtn.disabled = false;
       toast(`${SVG_OK} 申請已送出，等候管理員審核`);
       showHome();
     } catch (e) {
+      if (statusRequestId !== _makeupStatusRequestId ||
+          date !== document.getElementById("makeup-date").value) return;
       setLoading(false);
       submitBtn.disabled = false;
       if (e.status === 409 && applyMakeupConflict(e.detail)) return;
