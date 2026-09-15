@@ -13,4 +13,5 @@ test.db
 .venv/
 venv/
 .DS_Store
+.worktrees/
 scripts/.secrets.env
