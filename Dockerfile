@@ -15,5 +15,5 @@ USER appuser
 
 ENV PORT=8080
 
-# Run Alembic migrations then start the server
-CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT"]
+# Migrations run in the release job before service deployment.
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port $PORT"]
