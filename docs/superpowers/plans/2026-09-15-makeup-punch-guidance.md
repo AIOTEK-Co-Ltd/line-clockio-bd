@@ -4,15 +4,18 @@
 
 **Goal:** 依指定日期的資料庫打卡紀錄建議補卡類型，允許經明確確認的例外，並在主管核准前再次驗證。
 
-**Architecture:** 新增純後端 `makeup_validation` service，集中處理 `Asia/Taipei` 日界線、狀態分類及例外判斷；LIFF router 的 day-status、request、pending、review 都使用同一介面。`MakeupRequest` 保存送出當下狀態、系統建議與員工例外確認，前端只呈現與回傳使用者操作，最終判斷仍由後端完成。
+**Architecture:** 新增純後端 `makeup_validation` service，集中處理 `Asia/Taipei` 日界線、狀態分類、record snapshot token 及例外判斷；LIFF router 的 day-status、request、pending、review 都使用同一介面。`MakeupRequest` 保存送出當下狀態、系統建議與員工例外確認，前端傳本地日期／時間與所見 snapshot，最終時間換算與判斷仍由後端完成。Production 先以 Cloud Run migration job 套用 additive migration，成功後才部署 service revision。
 
-**Tech Stack:** Python 3.12、FastAPI、SQLAlchemy 2、Alembic、Jinja2、原生 JavaScript、pytest、ruff
+**Tech Stack:** Python 3.12、FastAPI、SQLAlchemy 2、Alembic、Jinja2、原生 JavaScript、pytest、ruff、Bun、GitHub Actions、GCP Cloud Run Jobs
 
 ## Global Constraints
 
 - 所有日期邊界使用 `Settings.timezone`，預設 `Asia/Taipei`；DB 時間維持 timezone-aware UTC／TIMESTAMPTZ。
 - 員工可忽略系統建議，但必須明確勾選確認；主管端必須看見並再次確認例外。
-- 後端在申請與核准時重新查 DB，不信任前端提供的建議值。
+- 後端在申請與核准時重新查 DB，並比較 record snapshot token；不信任前端提供的建議值。
+- snapshot 是 optimistic stale detection；本次不處理一般打卡的 DB constraint，也不宣稱消除最後一次查詢後的 TOCTOU 視窗。
+- 補卡 instant 由後端以 `requested_local_date`、`requested_local_time` 與 `Settings.timezone` 組合；不得依賴裝置 timezone。
+- 新版欄位在過渡期保持 optional；舊版 LIFF payload 回傳可由舊 JavaScript 顯示的純字串 refresh 訊息，不得直接 422。
 - 新增 migration revision `005`，不得修改已部署的 `001`–`004`。
 - 核准仍先 commit，再 best-effort 補傳 FTP；FTP 失敗不得回滾核准。
 - 不修改 FTP 格式、檔名、全日重傳方式或 Daisy 既有資料。
@@ -29,7 +32,7 @@
 
 **Interfaces:**
 - Consumes: `Session`、`CheckIn`、`CheckInType`、本地 `date` 與 `ZoneInfo`。
-- Produces: `MakeupDayState`、`MakeupDayAssessment`、`assess_makeup_day()`、`requires_exception_confirmation()`。
+- Produces: `MakeupDayState`、`MakeupDayAssessment`、`assess_makeup_day()`、`requires_exception_confirmation()` 與 deterministic `snapshot_token`。
 
 - [ ] **Step 1: 建立五種狀態與例外判斷的 failing tests**
 
@@ -52,8 +55,8 @@ TZ = ZoneInfo("Asia/Taipei")
 DAY = date(2026, 8, 26)
 
 
-def _employee(db) -> Employee:
-    employee = Employee(email="day-state@aiotek.com.tw", is_active=True)
+def _employee(db, email: str = "day-state@aiotek.com.tw") -> Employee:
+    employee = Employee(email=email, is_active=True)
     db.add(employee)
     db.commit()
     db.refresh(employee)
@@ -124,6 +127,34 @@ def test_requires_exception_only_for_override_or_unsafe_state(db):
 
     assert requires_exception_confirmation(assessment, CheckInType.clock_out) is False
     assert requires_exception_confirmation(assessment, CheckInType.clock_in) is True
+
+
+def test_snapshot_changes_when_ambiguous_records_change(db):
+    employee = _employee(db)
+    _punch(db, employee.id, CheckInType.clock_in, "09:00")
+    _punch(db, employee.id, CheckInType.clock_in, "09:25")
+    before = assess_makeup_day(db, employee.id, DAY, TZ)
+
+    _punch(db, employee.id, CheckInType.clock_out, "18:00")
+    after = assess_makeup_day(db, employee.id, DAY, TZ)
+
+    assert before.state == after.state == MakeupDayState.ambiguous
+    assert before.snapshot_token != after.snapshot_token
+
+
+def test_empty_snapshot_is_bound_to_employee_and_date(db):
+    first = _employee(db)
+    second = _employee(db, "day-state-second@aiotek.com.tw")
+
+    first_day = assess_makeup_day(db, first.id, DAY, TZ)
+    next_day = assess_makeup_day(db, first.id, date(2026, 8, 27), TZ)
+    other_employee = assess_makeup_day(db, second.id, DAY, TZ)
+
+    assert len({
+        first_day.snapshot_token,
+        next_day.snapshot_token,
+        other_employee.snapshot_token,
+    }) == 3
 ```
 
 - [ ] **Step 2: 執行測試確認因模組尚未存在而失敗**
@@ -137,8 +168,9 @@ Expected: collection fails with `ModuleNotFoundError: No module named 'app.servi
 ```python
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from enum import Enum
 from zoneinfo import ZoneInfo
 
@@ -164,6 +196,15 @@ class MakeupDayAssessment:
     state: MakeupDayState
     suggested_type: CheckInType | None
     records: tuple[CheckIn, ...]
+    snapshot_token: str
+
+
+def _snapshot_timestamp(record: CheckIn) -> str:
+    """Return a canonical UTC timestamp, including SQLite's naive test values."""
+    checked_at = record.checked_at
+    if checked_at.tzinfo is None:
+        checked_at = checked_at.replace(tzinfo=timezone.utc)
+    return checked_at.astimezone(timezone.utc).isoformat(timespec="microseconds")
 
 
 def assess_makeup_day(
@@ -182,21 +223,29 @@ def assess_makeup_day(
             CheckIn.checked_at >= start,
             CheckIn.checked_at < end,
         )
-        .order_by(CheckIn.checked_at.asc())
+        .order_by(CheckIn.checked_at.asc(), CheckIn.id.asc())
         .all()
     )
+    snapshot_source = "\n".join(
+        [f"employee={employee_id}|date={local_date.isoformat()}"]
+        + [
+            f"{record.id}|{record.type.value}|{_snapshot_timestamp(record)}"
+            for record in records
+        ]
+    )
+    snapshot_token = f"sha256:{hashlib.sha256(snapshot_source.encode()).hexdigest()}"
     clock_in_count = sum(record.type == CheckInType.clock_in for record in records)
     clock_out_count = sum(record.type == CheckInType.clock_out for record in records)
 
     if clock_in_count == 0 and clock_out_count == 0:
-        return MakeupDayAssessment(MakeupDayState.no_records, None, records)
+        return MakeupDayAssessment(MakeupDayState.no_records, None, records, snapshot_token)
     if clock_in_count == 0 and clock_out_count == 1:
-        return MakeupDayAssessment(MakeupDayState.missing_clock_in, CheckInType.clock_in, records)
+        return MakeupDayAssessment(MakeupDayState.missing_clock_in, CheckInType.clock_in, records, snapshot_token)
     if clock_in_count == 1 and clock_out_count == 0:
-        return MakeupDayAssessment(MakeupDayState.missing_clock_out, CheckInType.clock_out, records)
+        return MakeupDayAssessment(MakeupDayState.missing_clock_out, CheckInType.clock_out, records, snapshot_token)
     if clock_in_count == 1 and clock_out_count == 1:
-        return MakeupDayAssessment(MakeupDayState.complete, None, records)
-    return MakeupDayAssessment(MakeupDayState.ambiguous, None, records)
+        return MakeupDayAssessment(MakeupDayState.complete, None, records, snapshot_token)
+    return MakeupDayAssessment(MakeupDayState.ambiguous, None, records, snapshot_token)
 
 
 def requires_exception_confirmation(
@@ -231,11 +280,12 @@ git commit -m "feat(makeup): add day assessment service"
 **Files:**
 - Create: `migrations/versions/005_makeup_request_guidance_audit.py`
 - Modify: `app/models/makeup_request.py`
+- Modify: `migrations/env.py`
 - Modify: `tests/test_makeup_validation.py`
 
 **Interfaces:**
 - Consumes: `MakeupDayState.value` 與 `CheckInType`。
-- Produces: `MakeupRequest.day_state_at_submission`、`system_suggested_type`、`exception_confirmed`。
+- Produces: `MakeupRequest.day_state_at_submission`、`snapshot_token_at_submission`、`system_suggested_type`、`exception_confirmed`。
 
 - [ ] **Step 1: 新增 model persistence failing test**
 
@@ -252,6 +302,7 @@ def test_makeup_request_persists_guidance_audit(db):
         reason="確認例外",
         status=MakeupRequestStatus.pending,
         day_state_at_submission=MakeupDayState.missing_clock_out.value,
+        snapshot_token_at_submission="sha256:test-snapshot",
         system_suggested_type=CheckInType.clock_out,
         exception_confirmed=True,
     )
@@ -260,6 +311,7 @@ def test_makeup_request_persists_guidance_audit(db):
     db.refresh(request)
 
     assert request.day_state_at_submission == "missing_clock_out"
+    assert request.snapshot_token_at_submission == "sha256:test-snapshot"
     assert request.system_suggested_type == CheckInType.clock_out
     assert request.exception_confirmed is True
 ```
@@ -277,6 +329,9 @@ Add `Boolean` and `String` imports, then add:
 ```python
     day_state_at_submission: Mapped[Optional[str]] = mapped_column(
         String(32), nullable=True
+    )
+    snapshot_token_at_submission: Mapped[Optional[str]] = mapped_column(
+        String(80), nullable=True
     )
     system_suggested_type: Mapped[Optional[CheckInType]] = mapped_column(
         Enum(CheckInType, native_enum=False), nullable=True
@@ -311,6 +366,10 @@ def upgrade() -> None:
     )
     op.add_column(
         "makeup_requests",
+        sa.Column("snapshot_token_at_submission", sa.String(80), nullable=True),
+    )
+    op.add_column(
+        "makeup_requests",
         sa.Column("system_suggested_type", sa.String(20), nullable=True),
     )
     op.add_column(
@@ -327,10 +386,30 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_column("makeup_requests", "exception_confirmed")
     op.drop_column("makeup_requests", "system_suggested_type")
+    op.drop_column("makeup_requests", "snapshot_token_at_submission")
     op.drop_column("makeup_requests", "day_state_at_submission")
 ```
 
 - [ ] **Step 5: 執行 model tests 與 migration 靜態檢查**
+
+Before running Alembic, replace its dependency on the full application `Settings` with a migration-only settings model containing only `database_url` and the same `.env` support. This allows the production migration job to receive only `DATABASE_URL`; it must not need LINE, session, Mailgun or FTP secrets.
+
+```python
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class MigrationSettings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    database_url: str
+
+
+config.set_main_option("sqlalchemy.url", MigrationSettings().database_url)
+```
 
 Run: `uv run --with-requirements requirements-dev.txt pytest tests/test_makeup_validation.py -q`
 
@@ -343,7 +422,7 @@ Expected: exit 0.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add app/models/makeup_request.py migrations/versions/005_makeup_request_guidance_audit.py tests/test_makeup_validation.py
+git add app/models/makeup_request.py migrations/env.py migrations/versions/005_makeup_request_guidance_audit.py tests/test_makeup_validation.py
 git commit -m "feat(makeup): persist exception audit"
 ```
 
@@ -384,11 +463,13 @@ def test_makeup_day_status_suggests_missing_clock_out(client, db):
         )
 
     assert response.status_code == 200
-    assert response.json() == {
-        "state": "missing_clock_out",
-        "suggested_type": "clock_out",
-        "records": [{"type": "clock_in", "type_label": "上班", "time": "09:25"}],
-    }
+    body = response.json()
+    assert body["state"] == "missing_clock_out"
+    assert body["suggested_type"] == "clock_out"
+    assert body["records"] == [
+        {"type": "clock_in", "type_label": "上班", "time": "09:25"}
+    ]
+    assert body["snapshot_token"].startswith("sha256:")
 
 
 def test_makeup_request_requires_confirmation_for_wrong_type(client, db):
@@ -408,9 +489,13 @@ def test_makeup_request_requires_confirmation_for_wrong_type(client, db):
         response = client.post("/liff/makeup/request", json={
             "id_token": "tok",
             "type": "clock_in",
-            "requested_at": "2026-08-26T09:00:00+08:00",
+            "requested_local_date": "2026-08-26",
+            "requested_local_time": "09:00",
             "reason": "忘記打卡",
             "observed_day_state": "missing_clock_out",
+            "observed_snapshot_token": assess_makeup_day(
+                db, emp.id, date(2026, 8, 26), ZoneInfo("Asia/Taipei")
+            ).snapshot_token,
             "exception_confirmed": False,
         })
 
@@ -436,27 +521,35 @@ def test_makeup_request_persists_confirmed_exception(client, db):
         response = client.post("/liff/makeup/request", json={
             "id_token": "tok",
             "type": "clock_in",
-            "requested_at": "2026-08-26T09:00:00+08:00",
+            "requested_local_date": "2026-08-26",
+            "requested_local_time": "09:00",
             "reason": "確認仍需補上班",
             "observed_day_state": "missing_clock_out",
+            "observed_snapshot_token": assess_makeup_day(
+                db, emp.id, date(2026, 8, 26), ZoneInfo("Asia/Taipei")
+            ).snapshot_token,
             "exception_confirmed": True,
         })
 
     assert response.status_code == 200
     request = db.query(MakeupRequest).one()
     assert request.day_state_at_submission == "missing_clock_out"
+    assert request.snapshot_token_at_submission.startswith("sha256:")
     assert request.system_suggested_type == CheckInType.clock_out
     assert request.exception_confirmed is True
 ```
 
-Update every existing `/liff/makeup/request` payload that reaches request creation with:
+Update every existing `/liff/makeup/request` payload that reaches request creation with the new local fields and an assessment-derived token:
 
 ```python
-"observed_day_state": "no_records",
+"requested_local_date": local_day.isoformat(),
+"requested_local_time": "09:00",
+"observed_day_state": assessment.state.value,
+"observed_snapshot_token": assessment.snapshot_token,
 "exception_confirmed": False,
 ```
 
-The invalid type, future time and naive datetime tests may use the same fields because their earlier validation remains authoritative. The duplicate-pending test must create the existing request with `day_state_at_submission="no_records"` and submit the same two fields.
+Keep one explicit legacy test that sends only `requested_at` and asserts `409` with the plain-string refresh message. Replace the old naive-datetime test with invalid local date/time tests. The invalid type and future local time tests use the new fields; the duplicate-pending test must create the existing request with `day_state_at_submission="no_records"`, `snapshot_token_at_submission=assessment.snapshot_token`, and submit the same snapshot fields.
 
 - [ ] **Step 2: 執行新增測試確認 API 尚未實作**
 
@@ -467,7 +560,7 @@ Expected: tests fail with 404 or missing request fields.
 - [ ] **Step 3: 新增 payload、serializer 與 conflict helper**
 
 ```python
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timezone
 from typing import NoReturn
 
 from app.services.makeup_validation import (
@@ -486,9 +579,15 @@ class MakeupDayStatusRequest(BaseModel):
 class MakeupRequestCreate(BaseModel):
     id_token: str
     type: str
-    requested_at: datetime
     reason: str = Field(..., min_length=1, max_length=500)
-    observed_day_state: MakeupDayState
+    requested_local_date: date | None = None
+    requested_local_time: time | None = None
+    requested_at: datetime | None = None  # legacy client detection only
+    observed_day_state: MakeupDayState | None = None
+    observed_snapshot_token: str | None = Field(
+        default=None,
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
     exception_confirmed: bool = False
 
 
@@ -501,6 +600,7 @@ def _serialize_makeup_day(
         "suggested_type": (
             assessment.suggested_type.value if assessment.suggested_type else None
         ),
+        "snapshot_token": assessment.snapshot_token,
         "records": [
             {
                 "type": record.type.value,
@@ -547,13 +647,41 @@ async def liff_makeup_day_status(
     return _serialize_makeup_day(assessment, tz)
 ```
 
-Inside `liff_makeup_request`, after converting `requested_at` and `type`, add:
+Inside `liff_makeup_request`, after validating `type`, replace the existing naive-datetime and `requested_utc` block completely with the following legacy gate and server-side local-time conversion:
 
 ```python
+    if (
+        payload.requested_local_date is None
+        or payload.requested_local_time is None
+        or payload.observed_day_state is None
+        or payload.observed_snapshot_token is None
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="系統已更新，請關閉並重新開啟打卡頁面。",
+        )
+    if payload.requested_local_time.utcoffset() is not None:
+        raise HTTPException(
+            status_code=422,
+            detail="requested_local_time must not include a timezone offset.",
+        )
+
     tz = ZoneInfo(settings.timezone)
-    local_date = requested_utc.astimezone(tz).date()
+    local_date = payload.requested_local_date
+    requested_local = datetime.combine(
+        local_date,
+        payload.requested_local_time,
+        tzinfo=tz,
+    )
+    requested_utc = requested_local.astimezone(timezone.utc)
+    if requested_utc >= datetime.now(timezone.utc):
+        raise HTTPException(status_code=400, detail="補打卡時間不能是未來時間。")
+
     assessment = assess_makeup_day(db, employee.id, local_date, tz)
-    if payload.observed_day_state != assessment.state:
+    if (
+        payload.observed_day_state != assessment.state
+        or payload.observed_snapshot_token != assessment.snapshot_token
+    ):
         _raise_makeup_conflict(
             "stale_day_state",
             "當日打卡紀錄已更新，請重新確認補卡類型。",
@@ -574,6 +702,7 @@ When constructing `MakeupRequest`, add:
 
 ```python
         day_state_at_submission=assessment.state.value,
+        snapshot_token_at_submission=assessment.snapshot_token,
         system_suggested_type=assessment.suggested_type,
         exception_confirmed=requires_exception and payload.exception_confirmed,
 ```
@@ -617,6 +746,9 @@ def test_makeup_request_confirmation_policy(
             punch_type,
             datetime(2026, 8, 26, index, 30, tzinfo=timezone.utc),
         )
+    assessment = assess_makeup_day(
+        db, emp.id, date(2026, 8, 26), ZoneInfo("Asia/Taipei")
+    )
     settings = _mock_settings_liff()
     with patch("app.routers.liff.get_settings", return_value=settings), patch(
         "app.routers.liff._verify_line_token",
@@ -626,9 +758,11 @@ def test_makeup_request_confirmation_policy(
         response = client.post("/liff/makeup/request", json={
             "id_token": "tok",
             "type": selected_type,
-            "requested_at": "2026-08-26T12:00:00+08:00",
+            "requested_local_date": "2026-08-26",
+            "requested_local_time": "12:00",
             "reason": "確認補卡規則",
             "observed_day_state": state,
+            "observed_snapshot_token": assessment.snapshot_token,
             "exception_confirmed": confirmed,
         })
 
@@ -654,15 +788,65 @@ def test_makeup_request_rejects_stale_day_state(client, db):
         response = client.post("/liff/makeup/request", json={
             "id_token": "tok",
             "type": "clock_out",
-            "requested_at": "2026-08-26T18:00:00+08:00",
+            "requested_local_date": "2026-08-26",
+            "requested_local_time": "18:00",
             "reason": "畫面資料已過期",
             "observed_day_state": "no_records",
+            "observed_snapshot_token": f"sha256:{'0' * 64}",
             "exception_confirmed": False,
         })
 
     assert response.status_code == 409
     assert response.json()["detail"]["code"] == "stale_day_state"
     assert db.query(MakeupRequest).count() == 0
+
+
+def test_makeup_request_rejects_legacy_client_with_displayable_message(client, db):
+    _add_employee(db)
+    settings = _mock_settings_liff()
+    with patch("app.routers.liff.get_settings", return_value=settings), patch(
+        "app.routers.liff._verify_line_token",
+        new_callable=AsyncMock,
+        return_value=LINE_UID,
+    ):
+        response = client.post("/liff/makeup/request", json={
+            "id_token": "tok",
+            "type": "clock_in",
+            "requested_at": "2026-08-26T09:00:00+08:00",
+            "reason": "舊頁面",
+        })
+
+    assert response.status_code == 409
+    assert isinstance(response.json()["detail"], str)
+    assert "重新開啟" in response.json()["detail"]
+
+
+def test_makeup_request_interprets_local_time_in_settings_timezone(client, db):
+    emp = _add_employee(db)
+    assessment = assess_makeup_day(
+        db, emp.id, date(2026, 8, 26), ZoneInfo("Asia/Taipei")
+    )
+    settings = _mock_settings_liff()
+    with patch("app.routers.liff.get_settings", return_value=settings), patch(
+        "app.routers.liff._verify_line_token",
+        new_callable=AsyncMock,
+        return_value=LINE_UID,
+    ):
+        response = client.post("/liff/makeup/request", json={
+            "id_token": "tok",
+            "type": "clock_in",
+            "requested_local_date": "2026-08-26",
+            "requested_local_time": "09:00",
+            "reason": "時區測試",
+            "observed_day_state": assessment.state.value,
+            "observed_snapshot_token": assessment.snapshot_token,
+        })
+
+    assert response.status_code == 200
+    stored = db.query(MakeupRequest).one()
+    assert stored.requested_at.replace(tzinfo=timezone.utc) == datetime(
+        2026, 8, 26, 1, 0, tzinfo=timezone.utc
+    )
 
 
 def test_makeup_day_status_rejects_future_date(client, db):
@@ -703,6 +887,24 @@ def test_makeup_day_status_rejects_unbound_user(client, db):
         )
 
     assert response.status_code == 403
+
+
+def test_makeup_day_status_rejects_inactive_employee(client, db):
+    employee = _add_employee(db)
+    employee.is_active = False
+    db.commit()
+    settings = _mock_settings_liff()
+    with patch("app.routers.liff.get_settings", return_value=settings), patch(
+        "app.routers.liff._verify_line_token",
+        new_callable=AsyncMock,
+        return_value=LINE_UID,
+    ):
+        response = client.post(
+            "/liff/makeup/day-status",
+            json={"id_token": "tok", "date": "2026-08-26"},
+        )
+
+    assert response.status_code == 403
 ```
 
 - [ ] **Step 6: 執行 LIFF request tests**
@@ -736,6 +938,12 @@ git commit -m "feat(makeup): validate employee punch requests"
 def test_makeup_pending_returns_audit_and_current_day_status(client, db):
     manager = _add_employee(db)
     manager.is_manager = True
+    _add_checkin(
+        db,
+        manager.id,
+        CheckInType.clock_in,
+        datetime(2026, 8, 26, 1, 25, tzinfo=timezone.utc),
+    )
     request = MakeupRequest(
         employee_id=manager.id,
         type=CheckInType.clock_in,
@@ -743,6 +951,9 @@ def test_makeup_pending_returns_audit_and_current_day_status(client, db):
         reason="例外申請",
         status=MakeupRequestStatus.pending,
         day_state_at_submission="missing_clock_out",
+        snapshot_token_at_submission=assess_makeup_day(
+            db, manager.id, date(2026, 8, 26), ZoneInfo("Asia/Taipei")
+        ).snapshot_token,
         system_suggested_type=CheckInType.clock_out,
         exception_confirmed=True,
     )
@@ -758,9 +969,11 @@ def test_makeup_pending_returns_audit_and_current_day_status(client, db):
 
     item = response.json()["requests"][0]
     assert item["day_state_at_submission"] == "missing_clock_out"
+    assert item["snapshot_token_at_submission"].startswith("sha256:")
     assert item["system_suggested_type"] == "clock_out"
     assert item["exception_confirmed"] is True
-    assert item["current_day_status"]["state"] == "no_records"
+    assert item["current_day_status"]["state"] == "missing_clock_out"
+    assert item["records_changed_since_submission"] is False
 
 
 def test_makeup_review_requires_second_confirmation_for_exception(client, db):
@@ -779,11 +992,17 @@ def test_makeup_review_requires_second_confirmation_for_exception(client, db):
         reason="例外申請",
         status=MakeupRequestStatus.pending,
         day_state_at_submission="missing_clock_out",
+        snapshot_token_at_submission=assess_makeup_day(
+            db, manager.id, date(2026, 8, 26), ZoneInfo("Asia/Taipei")
+        ).snapshot_token,
         system_suggested_type=CheckInType.clock_out,
         exception_confirmed=True,
     )
     db.add(request)
     db.commit()
+    current = assess_makeup_day(
+        db, manager.id, date(2026, 8, 26), ZoneInfo("Asia/Taipei")
+    )
     settings = _mock_settings_liff()
     with patch("app.routers.liff.get_settings", return_value=settings), patch(
         "app.routers.liff._verify_line_token",
@@ -795,6 +1014,7 @@ def test_makeup_review_requires_second_confirmation_for_exception(client, db):
             "request_id": request.id,
             "action": "approve",
             "observed_day_state": "missing_clock_out",
+            "observed_snapshot_token": current.snapshot_token,
             "exception_confirmed": False,
         })
 
@@ -817,6 +1037,10 @@ class MakeupReviewPayload(BaseModel):
     request_id: int
     action: str
     observed_day_state: MakeupDayState | None = None
+    observed_snapshot_token: str | None = Field(
+        default=None,
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
     exception_confirmed: bool = False
 ```
 
@@ -842,12 +1066,18 @@ def _serialize_pending_makeup_request(
         "requested_at": request.requested_at.astimezone(tz).strftime("%m/%d %H:%M"),
         "reason": request.reason,
         "day_state_at_submission": request.day_state_at_submission,
+        "snapshot_token_at_submission": request.snapshot_token_at_submission,
         "system_suggested_type": (
             request.system_suggested_type.value
             if request.system_suggested_type else None
         ),
         "exception_confirmed": request.exception_confirmed,
         "current_day_status": _serialize_makeup_day(assessment, tz),
+        "records_changed_since_submission": (
+            None
+            if request.snapshot_token_at_submission is None
+            else request.snapshot_token_at_submission != assessment.snapshot_token
+        ),
     }
 ```
 
@@ -858,10 +1088,22 @@ Return `{"requests": [_serialize_pending_makeup_request(db, request, tz) for req
 Only run this block for `payload.action == "approve"`:
 
 ```python
+    if (
+        payload.observed_day_state is None
+        or payload.observed_snapshot_token is None
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="系統已更新，請關閉並重新開啟打卡頁面。",
+        )
+
     tz = ZoneInfo(settings.timezone)
     local_date = target.requested_at.astimezone(tz).date()
     current = assess_makeup_day(db, target.employee_id, local_date, tz)
-    if payload.observed_day_state != current.state:
+    if (
+        payload.observed_day_state != current.state
+        or payload.observed_snapshot_token != current.snapshot_token
+    ):
         _raise_makeup_conflict(
             "stale_day_state",
             "當日打卡紀錄已更新，請重新檢查後再核准。",
@@ -871,8 +1113,10 @@ Only run this block for `payload.action == "approve"`:
 
     needs_manager_confirmation = (
         target.day_state_at_submission is None
+        or target.snapshot_token_at_submission is None
         or target.exception_confirmed
         or target.day_state_at_submission != current.state.value
+        or target.snapshot_token_at_submission != current.snapshot_token
         or requires_exception_confirmation(current, target.type)
     )
     if needs_manager_confirmation and not payload.exception_confirmed:
@@ -884,14 +1128,15 @@ Only run this block for `payload.action == "approve"`:
         )
 ```
 
-Legacy requests have `day_state_at_submission=None`, so approval always requires explicit manager confirmation. Reject skips both checks.
+Legacy database requests have `day_state_at_submission=None`, so a refreshed manager page always requires explicit manager confirmation. An old manager page receives the plain-string refresh response instead of `[object Object]`. Reject skips both checks.
 
 - [ ] **Step 5: 補齊 stale、legacy、confirmed approval 與 concurrent tests**
 
-For every existing successful approval fixture, set:
+For every existing successful approval fixture, calculate `current = assess_makeup_day(...)` after arranging its punches, then set:
 
 ```python
 day_state_at_submission="no_records",
+snapshot_token_at_submission=current.snapshot_token,
 system_suggested_type=None,
 exception_confirmed=False,
 ```
@@ -900,6 +1145,7 @@ and send:
 
 ```python
 "observed_day_state": "no_records",
+"observed_snapshot_token": current.snapshot_token,
 "exception_confirmed": False,
 ```
 
@@ -916,6 +1162,7 @@ Add a confirmed path to `test_makeup_review_requires_second_confirmation_for_exc
             "request_id": request.id,
             "action": "approve",
             "observed_day_state": "missing_clock_out",
+            "observed_snapshot_token": current.snapshot_token,
             "exception_confirmed": True,
         })
 
@@ -949,6 +1196,9 @@ def test_makeup_review_requires_confirmation_for_legacy_request(client, db):
             "request_id": request.id,
             "action": "approve",
             "observed_day_state": "no_records",
+            "observed_snapshot_token": assess_makeup_day(
+                db, manager.id, date(2026, 8, 26), ZoneInfo("Asia/Taipei")
+            ).snapshot_token,
             "exception_confirmed": False,
         })
 
@@ -994,6 +1244,7 @@ def test_makeup_review_rejects_stale_day_state(client, db):
             "request_id": request.id,
             "action": "approve",
             "observed_day_state": "missing_clock_out",
+            "observed_snapshot_token": f"sha256:{'0' * 64}",
             "exception_confirmed": False,
         })
 
@@ -1003,6 +1254,10 @@ def test_makeup_review_rejects_stale_day_state(client, db):
 ```
 
 Keep the existing second-review assertion `status_code in (404, 409)` and both supplemental FTP tests.
+
+Also add a same-state stale test: submit an `ambiguous` request with two clock-ins, add a clock-out so the state remains `ambiguous` but the snapshot changes, and verify manager approval requires confirmation because `snapshot_token_at_submission != current.snapshot_token`.
+
+Add an old-manager-page compatibility test that sends `action="approve"` without state/snapshot and asserts a plain-string `409` containing「重新開啟」; verify `action="reject"` without those fields still succeeds.
 
 - [ ] **Step 6: 執行主管與 FTP tests**
 
@@ -1234,7 +1489,7 @@ function showMakeupForm() {
 }
 ```
 
-Replace the current direct radio lookup with `const type = selectedMakeupType();`. Before the current submit loading block, add:
+Replace the current direct radio lookup with `const type = selectedMakeupType();`. Remove the current device-timezone `Date` construction and its `toISOString()` use; the browser may validate that both fields exist, but the server is authoritative for future-time validation. Before the current submit loading block, add:
 
 ```javascript
 if (!_makeupDayStatus) { toast(`${SVG_WARN} 請先載入當日打卡紀錄`); return; }
@@ -1249,7 +1504,10 @@ if (makeupSelectionNeedsConfirmation() &&
 Update request payload:
 
 ```javascript
+requested_local_date: date,
+requested_local_time: time,
 observed_day_state: _makeupDayStatus.state,
+observed_snapshot_token: _makeupDayStatus.snapshot_token,
 exception_confirmed: document.getElementById("makeup-exception-confirmed").checked,
 ```
 
@@ -1323,6 +1581,9 @@ function renderMakeupReviewCard(request) {
   const exception = request.exception_confirmed
     ? '<div class="review-warning">員工已確認與系統建議不同</div>'
     : "";
+  const recordsChanged = request.records_changed_since_submission
+    ? '<div class="review-warning">申請送出後，當日打卡紀錄已更新</div>'
+    : "";
   return `
     <div class="review-card" id="review-card-${request.id}">
       <div class="review-header">
@@ -1333,6 +1594,7 @@ function renderMakeupReviewCard(request) {
       <div class="review-day-status">目前紀錄：${renderCurrentPunches(request.current_day_status)}</div>
       <div class="review-suggestion">${esc(suggestion)}</div>
       ${exception}
+      ${recordsChanged}
       <div class="review-reason">${SVG_CHAT_SM} ${esc(request.reason)}</div>
       <div class="review-actions">
         <button class="btn-approve" onclick="reviewRequest(${request.id},'approve',this)">✓ 核准</button>
@@ -1374,6 +1636,7 @@ async function reviewRequest(
   btnEl,
   exceptionConfirmed = false,
   observedDayState = null,
+  observedSnapshotToken = null,
 ) {
 ```
 
@@ -1382,11 +1645,14 @@ Always send the displayed state for approve:
 ```javascript
 const request = _pendingMakeupRequests.get(id);
 const state = observedDayState || request?.current_day_status?.state || null;
+const snapshotToken = observedSnapshotToken ||
+  request?.current_day_status?.snapshot_token || null;
 const data = await apiPost("/liff/makeup/review", {
   id_token: idToken,
   request_id: id,
   action,
   observed_day_state: action === "approve" ? state : null,
+  observed_snapshot_token: action === "approve" ? snapshotToken : null,
   exception_confirmed: action === "approve" && exceptionConfirmed,
 });
 ```
@@ -1400,9 +1666,17 @@ if (e.detail?.code === "stale_day_state") {
   return;
 }
 if (e.detail?.code === "exception_confirmation_required") {
+  setLoading(false);
   const confirmed = await confirmExceptionalApproval(request, e.detail.day_status);
   if (confirmed) {
-    await reviewRequest(id, action, btnEl, true, e.detail.day_status.state);
+    await reviewRequest(
+      id,
+      action,
+      btnEl,
+      true,
+      e.detail.day_status.state,
+      e.detail.day_status.snapshot_token,
+    );
     return;
   }
 }
@@ -1449,6 +1723,10 @@ git commit -m "feat(liff): surface makeup review warnings"
 **Files:**
 - Modify: `README.md`
 - Modify: `AGENTS.md`
+- Modify: `Dockerfile`
+- Modify: `.github/workflows/ci.yml`
+- Modify: `deploy.sh`
+- Create: `tests/test_deploy_contract.py`
 
 **Interfaces:**
 - Consumes: Tasks 1–6 的最終行為。
@@ -1462,12 +1740,15 @@ Add after the existing makeup rule:
 - 補打卡會依員工在所選本地日期的既有 `clock_in`／`clock_out` 建議缺少的類型；員工可以改選，但必須確認例外，主管核准時也會重新檢查並二次確認異常狀態。
 ```
 
+Update the deployment section to state that CI runs the one-task `line-clockio-migrate` Cloud Run Job and waits for success before deploying the service; application instances no longer run Alembic during startup.
+
 - [ ] **Step 2: 更新 AGENTS 不可破壞規則**
 
 Add:
 
 ```markdown
 - 補打卡類型建議以 `Settings.timezone` 的本地日期查詢 DB；前端只負責顯示，request 與 approve 都必須重新判斷。與建議不同、當日完整或紀錄異常時，需保留員工 audit 並要求主管二次確認。
+- Production migration 必須由單一 Cloud Run migration job 在 service deploy 前完成；Cloud Run service container startup 不得自行執行 Alembic。
 ```
 
 - [ ] **Step 3: 執行 focused tests**
@@ -1497,6 +1778,11 @@ docker run --rm --name line-clockio-migration-test \
   -e POSTGRES_PASSWORD=test-password \
   -e POSTGRES_DB=line_clockio_migration \
   -p 55432:5432 -d postgres:16
+trap 'docker stop line-clockio-migration-test >/dev/null 2>&1 || true' EXIT
+for attempt in {1..30}; do
+  docker exec line-clockio-migration-test pg_isready -U postgres && break
+  sleep 1
+done
 docker exec line-clockio-migration-test pg_isready -U postgres
 env DATABASE_URL=postgresql://postgres:test-password@127.0.0.1:55432/line_clockio_migration \
   uv run --with-requirements requirements-dev.txt alembic upgrade head
@@ -1505,11 +1791,100 @@ env DATABASE_URL=postgresql://postgres:test-password@127.0.0.1:55432/line_clocki
 env DATABASE_URL=postgresql://postgres:test-password@127.0.0.1:55432/line_clockio_migration \
   uv run --with-requirements requirements-dev.txt alembic upgrade head
 docker stop line-clockio-migration-test
+trap - EXIT
 ```
 
-Expected: all three commands exit 0; downgrade removes only the three `005` columns.
+Expected: all three commands exit 0; downgrade removes only the four `005` columns.
 
-- [ ] **Step 6: 執行本機 smoke test**
+- [ ] **Step 6: 將 production migration 從 service startup 移到 release gate**
+
+先以 read-only 指令核對目前 production service；將輸出記錄在 PR，不要輸出任何 secret 值：
+
+```bash
+gcloud run services describe line-clockio \
+  --project aiotek-bot \
+  --region asia-east1 \
+  --format='yaml(spec.template.spec.serviceAccountName,spec.template.metadata.annotations,status.traffic)'
+gcloud sql instances describe line-clockio-db-new \
+  --project aiotek-bot \
+  --format='yaml(connectionName,settings.ipConfiguration)'
+```
+
+若實際 instance、runtime service account 或 network attachment 與 repository 不同，停止並先修正 plan／workflow；不得猜測 production topology。確認後：
+
+1. 把 `Dockerfile` 的 `CMD` 改為只啟動 Uvicorn，移除每個 Cloud Run instance startup 都執行的 `alembic upgrade head`。
+2. 在 deploy job 中、service deploy 之前，以同一 commit source 建立或更新 `line-clockio-migrate` Cloud Run Job。
+3. Migration job 使用已核對的 runtime service account、Cloud SQL connection 與必要 network 設定，只注入 `DATABASE_URL`。
+4. 執行 migration job 並使用 `--wait`；失敗時 workflow 必須立即停止，不得繼續 `gcloud run deploy`。
+5. Migration 成功後才部署 `line-clockio` service。
+6. 為 deploy job 設定 GitHub Actions concurrency group，`cancel-in-progress: false`，避免兩次 main push 同時執行 migration。
+7. 同步修改 `deploy.sh`：它已先 build/push `${IMAGE}`，因此 migration job 與 service 都使用該 image；migration execution `--wait` 失敗時由既有 `set -e` 中止。不得留下可繞過 migration gate 的正式手動部署路徑。
+
+Workflow command shape：
+
+```bash
+gcloud run jobs deploy line-clockio-migrate \
+  --source . \
+  --region asia-east1 \
+  --project aiotek-bot \
+  --service-account "${RUNTIME_SERVICE_ACCOUNT}" \
+  --set-cloudsql-instances "${CLOUD_SQL_CONNECTION_NAME}" \
+  --set-secrets DATABASE_URL=DATABASE_URL:latest \
+  --command alembic \
+  --args upgrade,head \
+  --tasks 1 \
+  --parallelism 1 \
+  --max-retries 0 \
+  --quiet
+gcloud run jobs execute line-clockio-migrate \
+  --region asia-east1 \
+  --project aiotek-bot \
+  --wait
+```
+
+In `.github/workflows/ci.yml`, `--source .` and the following service deployment run from the same checked-out commit. In `deploy.sh`, replace `--source .` with `--image "${IMAGE}"` for the migration job so migration and service use the exact image pushed by that script.
+
+If the inspected service uses Direct VPC or a connector, add the equivalent supported network flags to the job. Verify the GitHub deploy service account can create/update/execute the job and act as the runtime service account; missing IAM is a deployment blocker, not a reason to bypass the migration gate.
+
+Add a contract test proving `Dockerfile` no longer contains `alembic upgrade head`，且 CI workflow 與 `deploy.sh` 都在 service deploy 前執行並等待 `line-clockio-migrate` 成功：
+
+```python
+from pathlib import Path
+
+
+def test_service_container_does_not_run_migrations_on_startup():
+    assert "alembic upgrade head" not in Path("Dockerfile").read_text()
+
+
+def test_ci_waits_for_migration_before_service_deploy():
+    workflow = Path(".github/workflows/ci.yml").read_text()
+    migration = "gcloud run jobs execute line-clockio-migrate"
+    service = "gcloud run deploy line-clockio"
+
+    assert migration in workflow
+    assert workflow.index(migration) < workflow.index(service)
+    assert "cancel-in-progress: false" in workflow
+
+
+def test_manual_deploy_waits_for_migration_before_service_deploy():
+    script = Path("deploy.sh").read_text()
+    migration = "gcloud run jobs execute line-clockio-migrate"
+    service = 'gcloud run deploy "${SERVICE}"'
+
+    assert migration in script
+    assert script.index(migration) < script.index(service)
+    assert "--wait" in script[script.index(migration):script.index(service)]
+```
+
+Run: `uv run --with-requirements requirements-dev.txt pytest tests/test_deploy_contract.py -q`
+
+Expected: all three contract tests pass.
+
+Run: `docker build --platform linux/amd64 -t line-clockio:makeup-guidance-test .`
+
+Expected: image builds successfully with the Uvicorn-only service command. Building the image must not execute Alembic or contact production resources.
+
+- [ ] **Step 7: 執行本機 HTTP 與 JavaScript smoke test**
 
 Run with local non-production settings:
 
@@ -1525,9 +1900,21 @@ env LINE_CHANNEL_ACCESS_TOKEN=smoke \
   uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Expected: `/health` returns HTTP 200 and `/liff/` renders without a JavaScript syntax error. Do not connect this smoke test to production DB, LINE, Mailgun or FTP.
+From another terminal:
 
-- [ ] **Step 7: 執行 LINE LIFF 手機驗收**
+```bash
+SMOKE_DIR="$(mktemp -d)"
+curl --fail http://127.0.0.1:8000/health
+curl --fail http://127.0.0.1:8000/liff/ -o "${SMOKE_DIR}/liff.html"
+bun -e 'const html = await Bun.file(process.argv[1]).text(); const blocks = [...html.matchAll(/<script(?![^>]*src=)[^>]*>([\s\S]*?)<\/script>/g)].map(match => match[1]); await Bun.write(process.argv[2], blocks.join("\n"));' \
+  "${SMOKE_DIR}/liff.html" "${SMOKE_DIR}/liff-inline.js"
+bun build "${SMOKE_DIR}/liff-inline.js" \
+  --target=browser --outfile="${SMOKE_DIR}/liff-inline.bundle.js"
+```
+
+Expected: both requests return HTTP 200 and `bun build` exits 0. The temporary directory may be removed after inspection. Do not connect this smoke test to production DB, LINE, Mailgun or FTP.
+
+- [ ] **Step 8: 執行 LINE LIFF 手機驗收**
 
 Verify these exact flows using an explicitly authorized test employee and manager:
 
@@ -1541,14 +1928,26 @@ Verify these exact flows using an explicitly authorized test employee and manage
 
 Expected: all seven flows match the spec at 320px width and on a physical LINE client. Do not create punches for real employees.
 
-- [ ] **Step 8: Commit documentation**
+- [ ] **Step 9: Commit deployment and documentation changes**
 
 ```bash
-git add README.md AGENTS.md
-git commit -m "docs(makeup): document punch guidance rules"
+git add README.md AGENTS.md Dockerfile .github/workflows/ci.yml deploy.sh tests/test_deploy_contract.py
+git commit -m "ci(deploy): gate service rollout on migrations"
 ```
 
-- [ ] **Step 9: Final diff and secret check**
+- [ ] **Step 10: 最終重新驗證**
+
+After all source, deployment, test, and documentation edits, rerun:
+
+```bash
+uv run --with-requirements requirements-dev.txt pytest -q
+uv run --with-requirements requirements-dev.txt ruff check app/
+uv run --with-requirements requirements-dev.txt ruff check tests/test_deploy_contract.py
+```
+
+Expected: pytest and both lint commands pass. This is the completion evidence; do not rely only on the earlier pre-deployment-edit run.
+
+- [ ] **Step 11: Final diff and secret check**
 
 Run:
 
@@ -1556,9 +1955,13 @@ Run:
 git status --short --branch
 git diff --check origin/main...HEAD
 git diff --stat origin/main...HEAD
-git diff origin/main...HEAD | rg -n '^\+.*(FTP_PASSWORD=|LINE_CHANNEL_ACCESS_TOKEN=|SESSION_SECRET_KEY=|"private_key")'
+if git diff origin/main...HEAD -- . ':!docs/superpowers/**' | \
+  rg -n '^\+.*(FTP_PASSWORD=|LINE_CHANNEL_ACCESS_TOKEN=|SESSION_SECRET_KEY=|"private_key")'; then
+  echo "Potential credential assignment found; inspect before continuing."
+  exit 1
+fi
 ```
 
-Expected: only intended files are changed; `git diff --check` exits 0; the final `rg` returns no matches, proving no credential assignment or service-account JSON was introduced in this branch.
+Expected: only intended files are changed; `git diff --check` and the guarded secret scan exit 0 with no matches, proving no credential assignment or service-account JSON was introduced outside the checked-in plan examples. Review any match manually.
 
 Use `superpowers:verification-before-completion` before reporting implementation complete. Then follow the repository Superpowers workflow: open a draft PR, run fresh-context review, resolve findings under the three-round convergence rule, mark the PR ready only after review passes, and integrate only by squash merge with branch deletion.

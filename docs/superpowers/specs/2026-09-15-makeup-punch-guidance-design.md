@@ -10,7 +10,7 @@
 
 - 員工選擇補卡日期後，顯示當日既有打卡並建議缺少的類型。
 - 員工仍可選擇與建議不同的類型，但必須明確確認例外。
-- 後端在送出與核准時重新查詢資料庫，避免只依賴前端或過期狀態。
+- 後端在送出與核准時重新查詢資料庫，並比較當日紀錄 snapshot token，避免只依賴前端或只比較粗略狀態。
 - 保存送出當下的判斷、系統建議及員工是否確認例外，供主管審核與稽核。
 - 主管審核時能看見既有紀錄、建議與例外原因，異常核准需再次確認。
 - 維持現有補打卡核准、資料庫 commit 與 FTP best-effort 補傳語意。
@@ -21,6 +21,7 @@
 - 不改變 FTP 欄位格式、檔名或補卡後的全日重傳行為。
 - 不新增修改或撤銷已核准補卡的功能。
 - 不處理一般打卡缺少資料庫級併發 constraint 的技術債。
+- 不承諾把主管核准與同時間發生的一般打卡做 transaction-level serialization；snapshot token 提供 optimistic stale detection，最後一次重新查詢後仍存在極短的 TOCTOU 視窗。
 - 不推導跨日班、輪班表或排班時間；本次只依指定本地日期內的 `CheckIn.type` 判斷。
 
 ## 當日狀態判斷
@@ -57,6 +58,7 @@ class MakeupDayAssessment:
     state: MakeupDayState
     suggested_type: CheckInType | None
     records: tuple[CheckIn, ...]
+    snapshot_token: str
 
 
 def assess_makeup_day(
@@ -68,7 +70,7 @@ def assess_makeup_day(
     ...
 ```
 
-查詢結果依 `checked_at` 升冪排序。服務只負責狀態與建議，不處理 HTTP、LINE token 或 UI 文案。
+查詢結果依 `checked_at`、`id` 升冪排序。`snapshot_token` 對 `employee_id`、local date，以及每筆紀錄的 `id`、`type`、UTC `checked_at` 做 canonical serialization 後計算 SHA-256；token 不可跨員工或日期重用，即使狀態仍為 `ambiguous`，新增或改動紀錄也會得到不同 token。服務只負責狀態、建議與 snapshot，不處理 HTTP、LINE token 或 UI 文案。
 
 ## API 設計
 
@@ -91,6 +93,7 @@ Response：
 {
   "state": "missing_clock_out",
   "suggested_type": "clock_out",
+  "snapshot_token": "sha256:...",
   "records": [
     {
       "type": "clock_in",
@@ -105,23 +108,28 @@ Response：
 
 ### 送出補打卡申請
 
-現有 `POST /liff/makeup/request` 增加：
+現有 `POST /liff/makeup/request` 的新版 payload 使用應用程式本地日期與時間，不由瀏覽器轉成 UTC：
 
 ```json
 {
+  "requested_local_date": "2026-08-26",
+  "requested_local_time": "18:00",
   "observed_day_state": "missing_clock_out",
+  "observed_snapshot_token": "sha256:...",
   "exception_confirmed": true
 }
 ```
 
-後端從 `requested_at` 取得 `Settings.timezone` 的本地日期，重新執行 `assess_makeup_day()`：
+後端以 `Settings.timezone` 組合 `requested_local_date` 與 `requested_local_time`，再轉成 UTC 保存；不得依賴手機或瀏覽器 timezone。過渡期間保留既有 `requested_at` 為 optional legacy 欄位；缺少新版日期、時間、state 或 snapshot 的舊頁面請求不建立申請，改回傳純字串 `409`：「系統已更新，請關閉並重新開啟打卡頁面。」讓舊版 JavaScript 也能正常顯示，而不是得到 422 或 `[object Object]`。
 
-1. `observed_day_state` 與重新計算結果不同時，回傳 `409 stale_day_state`，不得建立申請。
+後端重新執行 `assess_makeup_day()`：
+
+1. `observed_snapshot_token` 與重新計算結果不同時，回傳 `409 stale_day_state`，不得建立申請；`observed_day_state` 仍需相同，作為 payload 完整性檢查與 UI 語意。
 2. `missing_clock_in`／`missing_clock_out` 且申請類型符合建議時，正常建立申請。
 3. 申請類型與建議不同時，必須有 `exception_confirmed=true`。
 4. `complete` 或 `ambiguous` 必須有 `exception_confirmed=true`。
 5. `no_records` 可選任一類型，不要求例外確認。
-6. `system_suggested_type` 與 `day_state_at_submission` 全部由後端計算；`exception_confirmed` 只保存為「後端判定需要例外確認，且員工確實傳入確認」的結果，不採信前端提供的建議值。
+6. `system_suggested_type`、`day_state_at_submission` 與 `snapshot_token_at_submission` 全部保存後端重新計算的結果；`exception_confirmed` 只保存為「後端判定需要例外確認，且員工確實傳入確認」的結果，不採信前端提供的建議值。
 
 結構化衝突回應：
 
@@ -133,6 +141,7 @@ Response：
     "day_status": {
       "state": "missing_clock_out",
       "suggested_type": "clock_out",
+      "snapshot_token": "sha256:...",
       "records": [
         {"type": "clock_in", "type_label": "上班", "time": "09:25"}
       ]
@@ -148,17 +157,20 @@ Response：
 現有 `POST /liff/makeup/pending` 每筆增加：
 
 - `day_state_at_submission`
+- `snapshot_token_at_submission`
 - `system_suggested_type`
 - `exception_confirmed`
 - `current_day_status`
+- `records_changed_since_submission`（由 submission snapshot 與目前 snapshot 比較；legacy 為 `null`）
 
 `current_day_status` 由後端依目前 DB 狀態即時計算，用來識別申請後出現的新打卡。既有 legacy 申請的 audit 欄位可為空，主管端顯示「舊版申請，無送出時判斷紀錄」。
 
-現有 `POST /liff/makeup/review` payload 增加 `observed_day_state` 與 `exception_confirmed`，只在 `action=approve` 時使用：
+現有 `POST /liff/makeup/review` payload 增加 `observed_day_state`、`observed_snapshot_token` 與 `exception_confirmed`，只在 `action=approve` 時使用：
 
+- 舊版主管頁面核准時缺少 state／snapshot，回傳可由舊 JavaScript 顯示的純字串 `409` refresh 訊息；拒絕仍可正常執行。
 - 一般、未過期且非例外申請維持一鍵核准。
 - 申請本身為例外，或目前狀態與送出時不同時，第一次核准回 `409 exception_confirmation_required` 並附最新狀態。
-- 主管在 UI 二次確認後，以最新的 `observed_day_state` 及 `exception_confirmed=true` 重送。後端再次查詢；若狀態又有變化，仍回 `409 stale_day_state`，不得使用先前確認核准。
+- 主管在 UI 二次確認後，以最新的 state、snapshot token 及 `exception_confirmed=true` 重送。後端再次查詢；若紀錄 snapshot 又有變化，仍回 `409 stale_day_state`，不得使用先前確認核准。
 - 拒絕不需要二次確認。
 - 仍保留 atomic `UPDATE ... WHERE status='pending'`，避免兩位主管重複核准。
 
@@ -167,12 +179,13 @@ Response：
 新增 migration `005`，只增加欄位，不修改已部署的 `001`–`004`：
 
 - `day_state_at_submission VARCHAR(32) NULL`
+- `snapshot_token_at_submission VARCHAR(80) NULL`
 - `system_suggested_type VARCHAR(20) NULL`
 - `exception_confirmed BOOLEAN NOT NULL DEFAULT FALSE`
 
 `system_suggested_type` 在應用層僅允許 `clock_in`、`clock_out` 或 `NULL`。SQLAlchemy model 使用 `Enum(CheckInType, native_enum=False)`，避免建立或依賴新的 PostgreSQL native enum type。
 
-舊資料不回填：`day_state_at_submission` 與 `system_suggested_type` 保持 `NULL`，`exception_confirmed` 為 `false`。downgrade 只移除這三個新增欄位。
+舊資料不回填：`day_state_at_submission`、`snapshot_token_at_submission` 與 `system_suggested_type` 保持 `NULL`，`exception_confirmed` 為 `false`。downgrade 只移除這四個新增欄位。
 
 ## 員工端 UI
 
@@ -186,6 +199,7 @@ Response：
 - `no_records` 顯示提醒，但不顯示例外 checkbox。
 - API 失敗時保留日期、時間與原因，顯示可重試錯誤，禁止在未取得狀態時送出。
 - 收到 `stale_day_state` 時，以回應中的最新狀態更新畫面，清除原本的例外確認，要求員工重新檢查。
+- 送出時只傳 `requested_local_date`／`requested_local_time`；不得使用 `new Date(localString).toISOString()` 轉換補卡時間。
 
 ## 主管端 UI
 
@@ -195,6 +209,7 @@ Response：
 - 送出當下的系統建議。
 - 目前該日期的既有打卡類型與時間。
 - 例外申請的醒目提示：「員工已確認與系統建議不同」。
+- 送出後紀錄有變化時顯示：「申請送出後，當日打卡紀錄已更新」。
 - legacy 申請的 audit 缺失提示。
 
 一般申請維持目前的一鍵核准。例外申請或目前狀態已改變時，第一次核准顯示二次確認；確認文案必須列出申請類型、申請時間與目前既有紀錄，不能只顯示泛用的「確定嗎」。
@@ -211,6 +226,7 @@ Response：
 
 - `assess_makeup_day()`：覆蓋五種狀態及排序。
 - `assess_makeup_day()`：覆蓋 `Asia/Taipei` 跨 UTC 日期邊界。
+- `assess_makeup_day()`：紀錄新增後即使狀態仍為 `ambiguous`，snapshot token 也必須改變。
 - day-status：正常回傳、未來日期、無效日期、未綁定與 inactive 員工。
 - request：符合建議時建立申請並保存 audit。
 - request：改選但未確認時回 `exception_confirmation_required`。
@@ -218,6 +234,7 @@ Response：
 - request：`complete`／`ambiguous` 未確認時拒絕。
 - request：`no_records` 允許自行選擇且不標記例外。
 - request：送出前狀態改變時回 `stale_day_state`，不建立申請。
+- request：裝置 timezone 不參與補卡 instant 計算；legacy payload 得到可由舊版 UI 顯示的 refresh 訊息。
 - pending：回傳送出時 audit 與目前紀錄，legacy 欄位可為空。
 - review：一般申請一鍵核准；例外或狀態變更需二次確認。
 - review：二次確認後只建立一筆 `CheckIn`，保留原有 concurrent review 防護。
@@ -240,6 +257,8 @@ Response：
 
 ## 部署與 rollback
 
-部署順序為 migration `005` 後部署相容新欄位的應用程式。新增欄位對舊資料提供 nullable／default，migration 完成後不需要資料回填。
+部署順序固定為：以同一 commit source、production runtime service account、Cloud SQL attachment 與 `DATABASE_URL` 建立／更新一次性 Cloud Run migration job → 執行 `alembic upgrade head` 並等待成功 → 才部署同一 commit 的 service revision。migration job 失敗必須停止 deployment；不得先部署會讀取 `005` 欄位的應用程式。實作前先用 read-only `gcloud run services describe` 與 `gcloud sql instances describe` 核對實際 service account、instance connection name 與網路設定，不可只依腳本推斷。
+
+新增欄位對舊資料提供 nullable／default，因此 migration 可以安全地先於應用程式部署，且不需要資料回填。migration job 不得輸出 `DATABASE_URL` 或其他 secret 值。
 
 若應用程式需 rollback，可先回退至舊版程式並保留新增欄位；舊程式不讀取它們，不影響既有流程。只有確認不再需要 audit 資料時才執行 downgrade 至 `004`，避免不可逆地遺失新申請的確認紀錄。
