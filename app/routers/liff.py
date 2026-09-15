@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
@@ -143,12 +144,17 @@ class UpdateCardRequest(BaseModel):
 # ── Routes ─────────────────────────────────────────────────────────────────────
 
 @router.get("/liff/")
-async def liff_page(request: Request):
+async def liff_page(request: Request) -> HTMLResponse:
+    """Serve LIFF with the configured application timezone for makeup dates."""
     settings = get_settings()
     return templates.TemplateResponse(
         request,
         "liff/checkin.html",
-        {"liff_id": settings.liff_id, "app_base_url": settings.app_base_url},
+        {
+            "liff_id": settings.liff_id,
+            "app_base_url": settings.app_base_url,
+            "timezone": settings.timezone,
+        },
         headers={"Cache-Control": "no-store"},
     )
 

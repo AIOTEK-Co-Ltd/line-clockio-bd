@@ -84,6 +84,48 @@ def test_liff_page_loads_liff_sdk(client):
     assert "line-scdn.net/liff" in resp.text
 
 
+def test_liff_page_contains_makeup_guidance_controls(client):
+    """Employees can load records and explicitly confirm exceptional selections."""
+    resp = client.get("/liff/")
+    assert resp.status_code == 200
+    assert 'id="makeup-day-status"' in resp.text
+    assert 'id="makeup-exception-confirmed"' in resp.text
+    assert 'id="makeup-submit"' in resp.text
+    assert 'onchange="loadMakeupDayStatus()"' in resp.text
+    assert 'class="makeup-type-grid"' in resp.text
+    assert 'const APP_TIMEZONE = "Asia/Taipei"' in resp.text
+
+
+@pytest.mark.parametrize("tz", ["Asia/Taipei", "America/New_York"])
+def test_liff_page_injects_configured_makeup_timezone(client, tz):
+    """Makeup date defaults use the configured timezone, including non-Taipei zones."""
+    settings = _mock_settings_liff(tz)
+    settings.liff_id = "test-liff-id"
+    settings.app_base_url = "http://localhost:8000"
+    with patch("app.routers.liff.get_settings", return_value=settings):
+        resp = client.get("/liff/")
+    assert f'const APP_TIMEZONE = "{tz}"' in resp.text
+    assert "timeZone: APP_TIMEZONE" in resp.text
+
+
+def test_liff_page_submits_local_makeup_time_and_observed_status(client):
+    """The employee form sends local fields and the assessment instead of a device instant."""
+    page = client.get("/liff/").text
+    submit = page.split("async function submitMakeupRequest()", 1)[1].split(
+        "// ── Manager review", 1,
+    )[0]
+    for field in (
+        "requested_local_date: date", "requested_local_time: time",
+        "observed_day_state: _makeupDayStatus.state",
+        "observed_snapshot_token: _makeupDayStatus.snapshot_token",
+        "exception_confirmed:", "applyMakeupConflict(e.detail)",
+    ):
+        assert field in submit
+    assert "new Date(" not in submit
+    assert "toISOString" not in submit
+    assert "requested_at:" not in submit
+
+
 # ── POST /liff/* — liff_enabled guard (shared dependency) ────────────────────
 
 def _disabled_settings():
