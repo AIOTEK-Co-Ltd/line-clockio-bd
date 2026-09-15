@@ -299,6 +299,14 @@
     @media (max-width: 320px) { .makeup-type-grid { grid-template-columns: 1fr; } }
 
     /* ── Manager review cards ────────────────────────────────── */
+    .review-day-status, .review-suggestion {
+      font-size: 13px; color: var(--grey-sub); margin-bottom: 8px;
+      overflow-wrap: anywhere;
+    }
+    .review-warning {
+      padding: 9px 10px; margin-bottom: 10px; border-radius: var(--radius);
+      background: rgba(255,210,120,.92); color: var(--black); font-weight: 700;
+    }
     .review-card {
       background: var(--card);
       border-radius: var(--radius);
@@ -848,37 +856,80 @@
   }
 
   // ── Manager review ─────────────────────────────────────────
+  const _pendingMakeupRequests = new Map();
+
+  function renderCurrentPunches(status) {
+    if (!status?.records.length) return "當日尚無打卡紀錄";
+    return status.records.map(record => `${esc(record.type_label)} ${esc(record.time)}`).join("、");
+  }
+
+  function renderMakeupReviewCard(request) {
+    // IDs enter inline handlers, so only accept numeric database IDs here.
+    if (!Number.isSafeInteger(request.id)) return "";
+    const suggestion = request.system_suggested_type
+      ? `系統原建議：${request.system_suggested_type === "clock_in" ? "上班" : "下班"}打卡`
+      : request.day_state_at_submission
+        ? "系統原建議：無"
+        : "舊版申請，無送出時判斷紀錄";
+    const exception = request.exception_confirmed
+      ? '<div class="review-warning">員工已確認與系統建議不同</div>' : "";
+    const recordsChanged = request.records_changed_since_submission
+      ? '<div class="review-warning">申請送出後，當日打卡紀錄已更新</div>' : "";
+    return `
+      <div class="review-card" id="review-card-${request.id}">
+        <div class="review-header">
+          <span class="review-name">${esc(request.employee_name)}</span>
+          <span class="type-badge ${request.type === "clock_in" ? "badge-in" : "badge-out"}">${esc(request.type_label)}打卡</span>
+        </div>
+        <div class="review-time">${SVG_CAL_SM} ${esc(request.requested_at)}</div>
+        <div class="review-day-status">目前紀錄：${renderCurrentPunches(request.current_day_status)}</div>
+        <div class="review-suggestion">${esc(suggestion)}</div>
+        ${exception}
+        ${recordsChanged}
+        <div class="review-reason">${SVG_CHAT_SM} ${esc(request.reason)}</div>
+        <div class="review-actions">
+          <button class="btn-approve" onclick="reviewRequest(${request.id},'approve',this)">✓ 核准</button>
+          <button class="btn-reject" onclick="reviewRequest(${request.id},'reject',this)">✕ 拒絕</button>
+        </div>
+      </div>`;
+  }
+
+  function approvalConfirmationMessage(request, dayStatus) {
+    const type = request.type === "clock_in" ? "上班" : "下班";
+    const punches = dayStatus.records.map(record => `${record.type_label} ${record.time}`).join("、") || "無";
+    return `申請補${type}卡 ${request.requested_at}；目前紀錄：${punches}。確定仍要核准？`;
+  }
+
+  async function confirmExceptionalApproval(request, dayStatus) {
+    return showConfirm(approvalConfirmationMessage(request, dayStatus), "確認核准");
+  }
+
   async function showMakeupReview() {
     showScreen("screen-makeup-review", "補打卡審核", true);
+    _pendingMakeupRequests.clear();
     document.getElementById("review-list").innerHTML =
       '<div class="empty-state">載入中…</div>';
     try {
       const data = await apiPost("/liff/makeup/pending", { id_token: idToken });
       const list = document.getElementById("review-list");
+      data.requests.forEach(request => _pendingMakeupRequests.set(request.id, request));
       if (!data.requests.length) {
         list.innerHTML = '<div class="empty-state"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" style="display:block;margin:0 auto 12px;opacity:.6"><circle cx="12" cy="12" r="10"/><path d="M8 12l3 3 5-5"/></svg>目前沒有待審核的申請</div>';
         return;
       }
-      list.innerHTML = data.requests.map(r => `
-        <div class="review-card" id="review-card-${r.id}">
-          <div class="review-header">
-            <span class="review-name">${esc(r.employee_name)}</span>
-            <span class="type-badge ${r.type === "clock_in" ? "badge-in" : "badge-out"}">${esc(r.type_label)}打卡</span>
-          </div>
-          <div class="review-time">${SVG_CAL_SM} ${esc(r.requested_at)}</div>
-          <div class="review-reason">${SVG_CHAT_SM} ${esc(r.reason)}</div>
-          <div class="review-actions">
-            <button class="btn-approve" onclick="reviewRequest(${r.id},'approve',this)">✓ 核准</button>
-            <button class="btn-reject"  onclick="reviewRequest(${r.id},'reject',this)">✕ 拒絕</button>
-          </div>
-        </div>`).join("");
+      list.innerHTML = data.requests.map(renderMakeupReviewCard).join("");
     } catch {
       document.getElementById("review-list").innerHTML =
         '<div class="empty-state">載入失敗，請重試</div>';
     }
   }
 
-  async function reviewRequest(id, action, btnEl) {
+  async function reviewRequest(
+    id, action, btnEl, exceptionConfirmed = false,
+    observedDayState = null, observedSnapshotToken = null,
+  ) {
+    const request = _pendingMakeupRequests.get(id);
+    if (!request) return;
     // Disable both action buttons immediately to prevent double-submit before overlay appears
     if (btnEl) btnEl.parentElement.querySelectorAll("button").forEach(b => b.disabled = true);
     setLoading(true, action === "approve" ? "正在核准…" : "正在拒絕…");
@@ -887,10 +938,16 @@
         id_token: idToken,
         request_id: id,
         action,
+        observed_day_state: action === "approve"
+          ? observedDayState || request.current_day_status?.state || null : null,
+        observed_snapshot_token: action === "approve"
+          ? observedSnapshotToken || request.current_day_status?.snapshot_token || null : null,
+        exception_confirmed: action === "approve" && exceptionConfirmed,
       });
       setLoading(false);
       // Remove the reviewed card
       document.getElementById(`review-card-${id}`)?.remove();
+      _pendingMakeupRequests.delete(id);
       toast(`${SVG_OK} ${esc(data.message)}`);
       if (!document.querySelector(".review-card")) {
         document.getElementById("review-list").innerHTML =
@@ -903,7 +960,24 @@
       else        { badge.textContent = n; }
     } catch (e) {
       setLoading(false);
-      toast(`${SVG_ERR} ${esc(e.detail||"操作失敗，請重試")}`, 3500);
+      if (e.status === 409 && e.detail?.code === "stale_day_state") {
+        toast(`${SVG_WARN} ${esc(e.detail.message)}`, 4000);
+        await showMakeupReview();
+        return;
+      }
+      if (action === "approve" && e.status === 409 &&
+          e.detail?.code === "exception_confirmation_required" && e.detail.day_status) {
+        const confirmed = await confirmExceptionalApproval(request, e.detail.day_status);
+        if (confirmed) {
+          await reviewRequest(id, action, btnEl, true,
+            e.detail.day_status.state, e.detail.day_status.snapshot_token);
+        }
+        return;
+      }
+      const message = typeof e.detail === "string" ? e.detail : e.detail?.message;
+      toast(`${SVG_ERR} ${esc(message || "操作失敗，請重試")}`, 3500);
+    } finally {
+      btnEl?.parentElement.querySelectorAll("button").forEach(button => button.disabled = false);
     }
   }
 

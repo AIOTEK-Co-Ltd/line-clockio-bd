@@ -84,6 +84,18 @@ def test_liff_page_loads_liff_sdk(client):
     assert "line-scdn.net/liff" in resp.text
 
 
+def test_liff_page_contains_manager_makeup_warning_handlers(client) -> None:
+    """Managers see submission evidence and current punches before confirming exceptions."""
+    response = client.get("/liff/")
+    assert response.status_code == 200
+    for contract in (
+        "renderMakeupReviewCard", "confirmExceptionalApproval", "current_day_status",
+        "records_changed_since_submission", "系統原建議", "舊版申請，無送出時判斷紀錄",
+        "申請送出後，當日打卡紀錄已更新", "確定仍要核准？",
+    ):
+        assert contract in response.text
+
+
 def test_liff_page_contains_makeup_guidance_controls(client):
     """Employees can load records and explicitly confirm exceptional selections."""
     resp = client.get("/liff/")
