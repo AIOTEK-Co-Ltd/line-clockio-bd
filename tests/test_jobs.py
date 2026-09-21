@@ -90,6 +90,19 @@ def test_job_uploads_yesterdays_records(client, db):
     yesterday_utc = datetime(2026, 5, 4, 1, 0, 0, tzinfo=timezone.utc)
     _add_checkin(db, emp.id, CheckInType.clock_in, yesterday_utc)
 
+    # An inactive employee with a card must not reach the factory file
+    inactive = Employee(
+        email="left@aiotek.com.tw",
+        line_user_id="Uleft",
+        display_name="Left",
+        card_number="B7654321",
+        is_active=False,
+    )
+    db.add(inactive)
+    db.commit()
+    db.refresh(inactive)
+    _add_checkin(db, inactive.id, CheckInType.clock_in, yesterday_utc)
+
     settings = _mock_settings()
     with patch("app.routers.jobs.get_settings", return_value=settings), \
          patch("app.routers.jobs.upload_factory_file") as mock_upload, \
@@ -111,6 +124,11 @@ def test_job_uploads_yesterdays_records(client, db):
     assert body["records"] == 1
     assert "20260504" in body["filename"]
     mock_upload.assert_called_once()
+    # 01:00 UTC must be written as 09:00 Asia/Taipei, and only the active,
+    # carded employee may appear.
+    assert mock_upload.call_args[1]["content"] == (
+        b"0000000005,A1234567,2026/05/04,09:00:00\n"
+    )
 
 
 def test_job_excludes_employees_without_card(client, db):

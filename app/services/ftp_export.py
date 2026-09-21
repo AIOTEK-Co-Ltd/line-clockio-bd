@@ -7,6 +7,8 @@ import logging
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
+from app.services.time_utils import as_utc
+
 if TYPE_CHECKING:
     from app.models.check_in import CheckIn
 
@@ -21,7 +23,7 @@ def build_factory_lines(
     """Convert CheckIn rows to factory punch file lines (machine,card,date,time)."""
     lines = []
     for ci in check_ins:
-        local_dt = ci.checked_at.astimezone(tz)
+        local_dt = as_utc(ci.checked_at).astimezone(tz)
         lines.append(
             f"{machine_id},"
             f"{ci.employee.card_number},"

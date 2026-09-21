@@ -25,6 +25,7 @@ os.environ.setdefault("INTERNAL_SECRET", "test-internal-secret")
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import create_engine  # noqa: E402
+from sqlalchemy.pool import StaticPool  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402
 
 from app.database import Base, get_db  # noqa: E402
@@ -34,7 +35,14 @@ from app.main import app  # noqa: E402
 @pytest.fixture
 def db():
     """In-memory SQLite session — created fresh for every test."""
-    engine = create_engine("sqlite://", connect_args={"check_same_thread": False})
+    # StaticPool keeps every connection on the same in-memory database, so code
+    # that queries after a commit (e.g. the post-approval FTP export) sees the
+    # same tables instead of a fresh, empty connection.
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
     session = Session()

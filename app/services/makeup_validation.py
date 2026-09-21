@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy.orm import Session
 
 from app.models.check_in import CheckIn, CheckInType
+from app.services.time_utils import as_utc
 
 
 class MakeupDayState(str, Enum):
@@ -33,12 +34,9 @@ class MakeupDayAssessment:
 
 def _snapshot_timestamp(record: CheckIn) -> str:
     """Return a canonical UTC timestamp for a record."""
-    checked_at = record.checked_at
-    if checked_at is None:
+    if record.checked_at is None:
         raise ValueError("CheckIn.checked_at must be set")
-    if checked_at.tzinfo is None:
-        checked_at = checked_at.replace(tzinfo=timezone.utc)
-    return checked_at.astimezone(timezone.utc).isoformat(timespec="microseconds")
+    return as_utc(record.checked_at).isoformat(timespec="microseconds")
 
 
 def _snapshot_token(
@@ -102,12 +100,41 @@ def assess_makeup_day(
     )
 
 
+def _breaks_punch_order(
+    records: tuple[CheckIn, ...],
+    selected_type: CheckInType,
+    requested_at: datetime,
+) -> bool:
+    """Return whether the makeup time falls outside the day's existing punch order.
+
+    A clock_out before the earliest clock_in (or a clock_in after the latest
+    clock_out) makes daily work time collapse to zero in compute_daily_summary().
+    """
+    requested_utc = as_utc(requested_at)
+    if selected_type == CheckInType.clock_out:
+        clock_ins = [
+            as_utc(record.checked_at)
+            for record in records
+            if record.type == CheckInType.clock_in
+        ]
+        return bool(clock_ins) and requested_utc < min(clock_ins)
+    clock_outs = [
+        as_utc(record.checked_at)
+        for record in records
+        if record.type == CheckInType.clock_out
+    ]
+    return bool(clock_outs) and requested_utc > max(clock_outs)
+
+
 def requires_exception_confirmation(
     assessment: MakeupDayAssessment,
     selected_type: CheckInType,
+    requested_at: datetime,
 ) -> bool:
-    """Return whether the selected type conflicts with a safe day assessment."""
+    """Return whether the selected type or time conflicts with the day assessment."""
     if assessment.state in (MakeupDayState.complete, MakeupDayState.ambiguous):
+        return True
+    if _breaks_punch_order(assessment.records, selected_type, requested_at):
         return True
     if assessment.suggested_type is None:
         return False

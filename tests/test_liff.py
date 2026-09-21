@@ -536,8 +536,10 @@ def test_makeup_request_confirmation_policy(
 ):
     emp = _add_employee(db)
     for index, punch_type in enumerate(existing_types):
+        # clock_out punches sit in the afternoon so fixtures stay in punch order
+        base_hour = 0 if punch_type == CheckInType.clock_in else 10
         _add_checkin(db, emp.id, punch_type,
-                     datetime(2026, 8, 26, index, 30, tzinfo=timezone.utc))
+                     datetime(2026, 8, 26, base_hour + index, 30, tzinfo=timezone.utc))
     payload = _makeup_payload(db, emp.id)
     assert payload["observed_day_state"] == state
     payload.update(type=selected_type, exception_confirmed=confirmed)
@@ -1281,12 +1283,18 @@ def test_makeup_approve_triggers_supplemental_ftp_export(client, db):
     db.refresh(req)
     payload = _save_review_audit(db, req)
 
-    settings = _mock_settings_with_ftp()
+    # Noise that must NOT reach the file: an employee without a card number on
+    # the same day, and a carded punch on the previous day.
+    no_card = Employee(email="nocard@aiotek.com.tw", display_name="No Card", is_active=True)
+    db.add(no_card)
+    db.commit()
+    db.refresh(no_card)
+    _add_checkin(db, no_card.id, CheckInType.clock_in,
+                 datetime(2026, 6, 16, 1, 0, tzinfo=timezone.utc))
+    _add_checkin(db, emp.id, CheckInType.clock_in,
+                 datetime(2026, 6, 15, 1, 0, tzinfo=timezone.utc))
 
-    # Mock build_checkin_query so _try_supplemental_ftp_export doesn't hit the
-    # in-memory SQLite after commit (which would open a fresh, table-less connection).
-    mock_query = MagicMock()
-    mock_query.filter.return_value.order_by.return_value.all.return_value = []
+    settings = _mock_settings_with_ftp()
 
     upload_observations = []
 
@@ -1295,7 +1303,6 @@ def test_makeup_approve_triggers_supplemental_ftp_export(client, db):
 
     with patch("app.routers.liff.get_settings", return_value=settings), \
          patch("app.routers.liff._verify_line_token", new_callable=AsyncMock, return_value=LINE_UID), \
-         patch("app.routers.liff.build_checkin_query", return_value=mock_query), \
          patch.object(db, "commit", wraps=db.commit) as mock_commit, \
          patch("app.routers.liff.upload_factory_file", side_effect=check_commit_before_upload) as mock_upload:
         resp = client.post("/liff/makeup/review", json=payload)
@@ -1304,7 +1311,10 @@ def test_makeup_approve_triggers_supplemental_ftp_export(client, db):
     mock_upload.assert_called_once()
     assert upload_observations == [(1, True)]
     assert mock_upload.call_args[1]["filename"] == "factory_20260616.txt"
-    assert mock_upload.call_args[1]["content"] == b""
+    # Only the approved punch: same day, carded, converted to Asia/Taipei
+    assert mock_upload.call_args[1]["content"] == (
+        b"0000000005,AB123456,2026/06/16,08:40:00\n"
+    )
     db.expire_all()
     assert db.get(MakeupRequest, payload["request_id"]).status == MakeupRequestStatus.approved
     assert db.query(CheckIn).filter_by(ip_address="makeup:approved").count() == 1
@@ -1330,14 +1340,10 @@ def test_makeup_approve_ftp_failure_does_not_break_approval(client, db):
     db.refresh(req)
     payload = _save_review_audit(db, req)
 
-    mock_query = MagicMock()
-    mock_query.filter.return_value.order_by.return_value.all.return_value = []
-
     settings = _mock_settings_with_ftp()
 
     with patch("app.routers.liff.get_settings", return_value=settings), \
          patch("app.routers.liff._verify_line_token", new_callable=AsyncMock, return_value=LINE_UID), \
-         patch("app.routers.liff.build_checkin_query", return_value=mock_query), \
          patch("app.routers.liff.upload_factory_file", side_effect=Exception("FTP down")) as mock_upload, \
          patch.object(db, "rollback", wraps=db.rollback) as mock_rollback:
         resp = client.post("/liff/makeup/review", json=payload)
@@ -1351,3 +1357,41 @@ def test_makeup_approve_ftp_failure_does_not_break_approval(client, db):
     assert db.get(MakeupRequest, payload["request_id"]).status == MakeupRequestStatus.approved
     checkin = db.query(CheckIn).filter_by(employee_id=emp.id, ip_address="makeup:approved").first()
     assert checkin is not None
+
+
+def test_makeup_request_requires_confirmation_when_clock_out_precedes_clock_in(client, db):
+    """A clock_out earlier than the day's clock_in silently zeroes work time."""
+    emp = _add_employee(db)
+    _add_checkin(db, emp.id, CheckInType.clock_in,
+                 datetime(2026, 8, 26, 1, 0, tzinfo=timezone.utc))  # 09:00 local
+    payload = _makeup_payload(db, emp.id)
+    payload["type"] = "clock_out"
+    payload["requested_local_time"] = "06:00"
+
+    response = _post_makeup(client, payload)
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "exception_confirmation_required"
+    assert db.query(MakeupRequest).count() == 0
+
+    payload["exception_confirmed"] = True
+    confirmed = _post_makeup(client, payload)
+    assert confirmed.status_code == 200
+    assert db.query(MakeupRequest).one().exception_confirmed is True
+
+
+def test_makeup_review_requires_confirmation_for_out_of_order_request(client, db):
+    manager = _add_employee(db)
+    manager.is_manager = True
+    _add_checkin(db, manager.id, CheckInType.clock_in,
+                 datetime(2026, 8, 26, 1, 0, tzinfo=timezone.utc))  # 09:00 local
+    request = _add_review_request(db, manager.id, CheckInType.clock_out)
+    request.requested_at = datetime(2026, 8, 25, 22, 0, tzinfo=timezone.utc)  # 06:00 local
+    db.commit()
+    payload = _save_review_audit(db, request)
+
+    response = _post_makeup(client, payload, "review")
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "exception_confirmation_required"
+    assert db.query(CheckIn).filter_by(ip_address="makeup:approved").count() == 0

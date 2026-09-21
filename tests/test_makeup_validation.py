@@ -130,8 +130,12 @@ def test_requires_exception_only_for_override_or_unsafe_state(db):
     _punch(db, employee.id, CheckInType.clock_in, "09:25")
     assessment = assess_makeup_day(db, employee.id, DAY, TZ)
 
-    assert requires_exception_confirmation(assessment, CheckInType.clock_out) is False
-    assert requires_exception_confirmation(assessment, CheckInType.clock_in) is True
+    assert requires_exception_confirmation(
+        assessment, CheckInType.clock_out, _utc("18:00")
+    ) is False
+    assert requires_exception_confirmation(
+        assessment, CheckInType.clock_in, _utc("09:00")
+    ) is True
 
 
 def test_snapshot_changes_when_ambiguous_records_change(db):
@@ -162,3 +166,48 @@ def test_empty_snapshot_is_bound_to_employee_and_date(db):
             other_employee.snapshot_token,
         }
     ) == 3
+
+
+def _utc(local_time: str) -> datetime:
+    """Return the UTC instant for a local time on DAY."""
+    hour, minute = map(int, local_time.split(":"))
+    return datetime(2026, 8, 26, hour, minute, tzinfo=TZ).astimezone(timezone.utc)
+
+
+def test_requires_exception_when_clock_out_precedes_existing_clock_in(db):
+    employee = _employee(db)
+    _punch(db, employee.id, CheckInType.clock_in, "09:00")
+    assessment = assess_makeup_day(db, employee.id, DAY, TZ)
+
+    assert requires_exception_confirmation(
+        assessment, CheckInType.clock_out, _utc("06:00")
+    ) is True
+    assert requires_exception_confirmation(
+        assessment, CheckInType.clock_out, _utc("18:00")
+    ) is False
+
+
+def test_requires_exception_when_clock_in_follows_existing_clock_out(db):
+    employee = _employee(db)
+    _punch(db, employee.id, CheckInType.clock_out, "18:00")
+    assessment = assess_makeup_day(db, employee.id, DAY, TZ)
+
+    assert requires_exception_confirmation(
+        assessment, CheckInType.clock_in, _utc("20:00")
+    ) is True
+    assert requires_exception_confirmation(
+        assessment, CheckInType.clock_in, _utc("09:00")
+    ) is False
+
+
+def test_order_guard_uses_earliest_in_and_latest_out(db):
+    """Boundary punches, not arbitrary ones, define the valid window."""
+    employee = _employee(db)
+    _punch(db, employee.id, CheckInType.clock_in, "09:00")
+    _punch(db, employee.id, CheckInType.clock_in, "13:00")
+    assessment = assess_makeup_day(db, employee.id, DAY, TZ)
+
+    # ambiguous already forces confirmation; the guard must not relax it
+    assert requires_exception_confirmation(
+        assessment, CheckInType.clock_out, _utc("18:00")
+    ) is True
