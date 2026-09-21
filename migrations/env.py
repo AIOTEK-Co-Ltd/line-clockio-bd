@@ -1,19 +1,25 @@
 from logging.config import fileConfig
 
-from sqlalchemy import engine_from_config, pool
 from alembic import context
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy import engine_from_config, pool
 
 config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Import all models so Alembic sees them
-import app.models  # noqa: F401 — triggers __init__.py re-exports, registers all tables
-from app.database import Base
-from app.config import get_settings
+class MigrationSettings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
-config.set_main_option("sqlalchemy.url", get_settings().database_url)
-target_metadata = Base.metadata
+    database_url: str
+
+
+config.set_main_option("sqlalchemy.url", MigrationSettings().database_url)
+target_metadata = None
 
 
 def run_migrations_offline() -> None:

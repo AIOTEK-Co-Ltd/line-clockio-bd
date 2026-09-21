@@ -39,11 +39,13 @@
 - 時間必須是 timezone-aware。DB 保存 UTC／TIMESTAMPTZ，顯示與日界線依 `Settings.timezone`（預設 `Asia/Taipei`）。
 - 一般下班打卡必須已有同日上班；同日同類型不可重複。若修改併發行為，要同時考慮 DB constraint 與 API idempotency。
 - 補打卡時間必須含 timezone 且早於現在；只有 manager 可審核。核准會新增 `CheckIn`，GPS 為 `0.0, 0.0`、IP marker 為 `makeup:approved`，並在 commit 後 best-effort 補傳 FTP；FTP 失敗不得回滾核准。
+- 補打卡類型建議以 `Settings.timezone` 的本地日期查詢 DB；前端只負責顯示，request 與 approve 都必須重新判斷。與建議不同、當日完整或紀錄異常時，需保留員工 audit 並要求主管二次確認。
 - 每日工時採第一筆 `clock_in` 到最後一筆 `clock_out`，固定扣 60 分鐘午休；加班超過 8 小時後，以 30 分鐘向下計算，分 2h + 2h 級距。不要依舊 spec 改成不扣午休。
 - 員工卡號固定 8 碼英數、儲存為大寫且全表唯一。修改格式時須同步 `CARD_NUMBER_RE`、Pydantic validation、LIFF JavaScript regex、DB migration、匯入與 tests。
 - 工廠匯出只包含有卡號的 active employee；格式為 `machine_id,card_number,YYYY/MM/DD,HH:MM:SS`。每日 job 的空檔是刻意行為，不能因 `lines == []` 跳過上傳。
 - Dashboard 寫入型 POST 必須驗證 CSRF token。CSV 輸出文字欄位必須經 `_csv_safe()` 防止 formula injection。
 - Production session cookie 必須維持 `https_only=True`；API docs 只在 debug 開啟。
+- Production migration 必須由單一 Cloud Run migration job 在 service deploy 前完成；Cloud Run service container startup 不得自行執行 Alembic。
 
 ## 開發與驗證指令
 

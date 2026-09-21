@@ -59,6 +59,12 @@ jobs:
     needs: [lint, test]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
+    concurrency:
+      group: line-clockio-production-deploy
+      cancel-in-progress: false
+    env:
+      RUNTIME_SERVICE_ACCOUNT: 600104370576-compute@developer.gserviceaccount.com
+      CLOUD_SQL_CONNECTION_NAME: aiotek-bot:asia-east1:line-clockio-db-new
     steps:
       - uses: actions/checkout@v4
 
@@ -68,11 +74,33 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@v2
 
+      - name: Run database migrations
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run jobs deploy line-clockio-migrate \
+            --source . \
+            --region asia-east1 \
+            --project aiotek-bot \
+            --service-account "${RUNTIME_SERVICE_ACCOUNT}" \
+            --set-cloudsql-instances "${CLOUD_SQL_CONNECTION_NAME}" \
+            --set-secrets DATABASE_URL=DATABASE_URL:latest \
+            --command alembic \
+            --args upgrade,head \
+            --tasks 1 \
+            --parallelism 1 \
+            --max-retries 0 \
+            --quiet
+          gcloud run jobs execute line-clockio-migrate \
+            --region asia-east1 \
+            --project aiotek-bot \
+            --wait
+
       - name: Deploy to Cloud Run
         run: |
           gcloud run deploy line-clockio \
             --source . \
             --region asia-east1 \
             --project=aiotek-bot \
-            --set-cloudsql-instances=aiotek-bot:asia-east1:line-clockio-db-new \
+            --set-cloudsql-instances "${CLOUD_SQL_CONNECTION_NAME}" \
             --quiet

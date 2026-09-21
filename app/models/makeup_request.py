@@ -4,7 +4,7 @@ import datetime
 import enum
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Integer, Text
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -41,6 +41,18 @@ class MakeupRequest(Base):
         Enum(MakeupRequestStatus, native_enum=False),
         nullable=False,
         server_default="pending",
+    )
+    day_state_at_submission: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True
+    )
+    snapshot_token_at_submission: Mapped[Optional[str]] = mapped_column(
+        String(80), nullable=True
+    )
+    system_suggested_type: Mapped[Optional[CheckInType]] = mapped_column(
+        Enum(CheckInType, native_enum=False), nullable=True
+    )
+    exception_confirmed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
     )
     reviewed_by: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("employees.id"), nullable=True

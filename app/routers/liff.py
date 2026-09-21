@@ -1,9 +1,11 @@
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timezone
+from typing import NoReturn
 from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
@@ -11,6 +13,12 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.services.checkin_query import build_checkin_query
 from app.services.ftp_export import build_factory_lines, upload_factory_file
+from app.services.makeup_validation import (
+    MakeupDayAssessment,
+    MakeupDayState,
+    assess_makeup_day,
+    requires_exception_confirmation,
+)
 from app.services.overtime import (
     MONTHLY_OT_LIMIT,
     compute_monthly_summaries,
@@ -98,17 +106,34 @@ class CheckInRequest(BaseModel):
     id_token: str
 
 
+class MakeupDayStatusRequest(BaseModel):
+    id_token: str
+    date: date
+
+
 class MakeupRequestCreate(BaseModel):
     id_token: str
     type: str
-    requested_at: datetime
     reason: str = Field(..., min_length=1, max_length=500)
+    requested_local_date: date | None = None
+    requested_local_time: time | None = None
+    requested_at: datetime | None = None  # Legacy client detection only.
+    observed_day_state: MakeupDayState | None = None
+    observed_snapshot_token: str | None = Field(
+        default=None, pattern=r"^sha256:[0-9a-f]{64}$",
+    )
+    exception_confirmed: bool = False
 
 
 class MakeupReviewPayload(BaseModel):
     id_token: str
     request_id: int
     action: str  # "approve" or "reject"
+    observed_day_state: MakeupDayState | None = None
+    observed_snapshot_token: str | None = Field(
+        default=None, pattern=r"^sha256:[0-9a-f]{64}$",
+    )
+    exception_confirmed: bool = False
 
 
 class UpdateCardRequest(BaseModel):
@@ -119,12 +144,17 @@ class UpdateCardRequest(BaseModel):
 # ── Routes ─────────────────────────────────────────────────────────────────────
 
 @router.get("/liff/")
-async def liff_page(request: Request):
+async def liff_page(request: Request) -> HTMLResponse:
+    """Serve LIFF with the configured application timezone for makeup dates."""
     settings = get_settings()
     return templates.TemplateResponse(
         request,
         "liff/checkin.html",
-        {"liff_id": settings.liff_id, "app_base_url": settings.app_base_url},
+        {
+            "liff_id": settings.liff_id,
+            "app_base_url": settings.app_base_url,
+            "timezone": settings.timezone,
+        },
         headers={"Cache-Control": "no-store"},
     )
 
@@ -307,13 +337,121 @@ async def liff_checkin(
 
 # ── Makeup punch endpoints ─────────────────────────────────────────────────────
 
+def _makeup_time_utc(local_date: date, local_time: time, tz: ZoneInfo) -> datetime:
+    """Convert a unique local time to UTC, rejecting DST gaps and folds."""
+    requested_local = datetime.combine(local_date, local_time, tzinfo=tz)
+    requested_utc = requested_local.astimezone(timezone.utc)
+    if requested_utc.astimezone(tz) != requested_local:
+        raise HTTPException(
+            status_code=422,
+            detail=f"補打卡時間在 {tz.key} 因時區調整而不存在，請選擇其他時間。",
+        )
+    if requested_local.replace(fold=1).astimezone(timezone.utc) != requested_utc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"補打卡時間在 {tz.key} 因時區調整而重複，無法確認實際時間，請選擇其他時間。",
+        )
+    return requested_utc
+
+
+def _serialize_makeup_day(
+    assessment: MakeupDayAssessment,
+    tz: ZoneInfo,
+) -> dict[str, object]:
+    """Serialize the assessment with punch times in the configured timezone."""
+    records = []
+    for record in assessment.records:
+        checked_at = record.checked_at
+        # SQLite returns naive UTC values for timezone-aware columns.
+        if checked_at.tzinfo is None:
+            checked_at = checked_at.replace(tzinfo=timezone.utc)
+        records.append({
+            "type": record.type.value,
+            "type_label": "上班" if record.type == CheckInType.clock_in else "下班",
+            "time": checked_at.astimezone(tz).strftime("%H:%M"),
+        })
+    return {
+        "state": assessment.state.value,
+        "suggested_type": assessment.suggested_type.value if assessment.suggested_type else None,
+        "snapshot_token": assessment.snapshot_token,
+        "records": records,
+    }
+
+
+def _raise_makeup_conflict(
+    code: str,
+    message: str,
+    assessment: MakeupDayAssessment,
+    tz: ZoneInfo,
+) -> NoReturn:
+    """Return a recoverable conflict with the current assessment."""
+    raise HTTPException(status_code=409, detail={
+        "code": code,
+        "message": message,
+        "day_status": _serialize_makeup_day(assessment, tz),
+    })
+
+
+def _serialize_pending_makeup_request(
+    db: Session,
+    request: MakeupRequest,
+    tz: ZoneInfo,
+) -> dict[str, object]:
+    """Include submission audit and the employee's current local-day assessment."""
+    requested_at = request.requested_at
+    # SQLite returns naive UTC values for timezone-aware columns.
+    if requested_at.tzinfo is None:
+        requested_at = requested_at.replace(tzinfo=timezone.utc)
+    assessment = assess_makeup_day(
+        db, request.employee_id, requested_at.astimezone(tz).date(), tz,
+    )
+    return {
+        "id": request.id,
+        "employee_name": (
+            request.employee.display_name or request.employee.full_name or request.employee.email
+        ),
+        "type": request.type.value,
+        "type_label": "上班" if request.type == CheckInType.clock_in else "下班",
+        "requested_at": requested_at.astimezone(tz).strftime("%m/%d %H:%M"),
+        "reason": request.reason,
+        "day_state_at_submission": request.day_state_at_submission,
+        "snapshot_token_at_submission": request.snapshot_token_at_submission,
+        "system_suggested_type": (
+            request.system_suggested_type.value if request.system_suggested_type else None
+        ),
+        "exception_confirmed": request.exception_confirmed,
+        "current_day_status": _serialize_makeup_day(assessment, tz),
+        "records_changed_since_submission": (
+            None if request.snapshot_token_at_submission is None
+            else request.snapshot_token_at_submission != assessment.snapshot_token
+        ),
+    }
+
+
+@router.post("/liff/makeup/day-status")
+async def liff_makeup_day_status(
+    payload: MakeupDayStatusRequest,
+    db: Session = Depends(get_db),
+    _: None = Depends(_require_liff),
+) -> dict[str, object]:
+    """Return the verified employee's makeup assessment for a local date."""
+    settings = get_settings()
+    line_user_id = await _verify_line_token(payload.id_token, settings.liff_channel_id)
+    employee = _get_employee(db, line_user_id)
+    tz = ZoneInfo(settings.timezone)
+    if payload.date > datetime.now(tz).date():
+        raise HTTPException(status_code=400, detail="補打卡日期不能是未來日期。")
+    assessment = assess_makeup_day(db, employee.id, payload.date, tz)
+    return _serialize_makeup_day(assessment, tz)
+
+
 @router.post("/liff/makeup/request")
 async def liff_makeup_request(
     payload: MakeupRequestCreate,
     db: Session = Depends(get_db),
     _: None = Depends(_require_liff),
-):
-    """Employee submits a makeup punch request."""
+) -> dict[str, object]:
+    """Validate the employee's observed day state and submit a makeup request."""
     settings = get_settings()
     line_user_id = await _verify_line_token(payload.id_token, settings.liff_channel_id)
     employee = _get_employee(db, line_user_id)
@@ -323,16 +461,46 @@ async def liff_makeup_request(
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid type. Must be 'clock_in' or 'clock_out'.")
 
-    # Reject naive datetimes — treating them as UTC would cause an 8-hour error
-    # for clients in Asia/Taipei. Require explicit timezone info (e.g. +08:00 or Z).
-    if payload.requested_at.tzinfo is None:
+    if (
+        payload.requested_local_date is None
+        or payload.requested_local_time is None
+        or payload.observed_day_state is None
+        or payload.observed_snapshot_token is None
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="系統已更新，請關閉並重新開啟打卡頁面。",
+        )
+    if payload.requested_local_time.utcoffset() is not None:
         raise HTTPException(
             status_code=422,
-            detail="requested_at must include timezone info (e.g. 2026-04-28T09:00:00+08:00).",
+            detail="requested_local_time must not include a timezone offset.",
         )
-    requested_utc = payload.requested_at.astimezone(timezone.utc)
+    tz = ZoneInfo(settings.timezone)
+    local_date = payload.requested_local_date
+    requested_utc = _makeup_time_utc(local_date, payload.requested_local_time, tz)
     if requested_utc >= datetime.now(timezone.utc):
         raise HTTPException(status_code=400, detail="補打卡時間不能是未來時間。")
+
+    assessment = assess_makeup_day(db, employee.id, local_date, tz)
+    if (
+        payload.observed_day_state != assessment.state
+        or payload.observed_snapshot_token != assessment.snapshot_token
+    ):
+        _raise_makeup_conflict(
+            "stale_day_state",
+            "當日打卡紀錄已更新，請重新確認補卡類型。",
+            assessment,
+            tz,
+        )
+    requires_exception = requires_exception_confirmation(assessment, makeup_type)
+    if requires_exception and not payload.exception_confirmed:
+        _raise_makeup_conflict(
+            "exception_confirmation_required",
+            "補卡類型與當日紀錄不一致，請確認後再送出。",
+            assessment,
+            tz,
+        )
 
     # Prevent duplicate pending requests for the same punch slot
     duplicate_pending = db.query(MakeupRequest).filter(
@@ -350,6 +518,10 @@ async def liff_makeup_request(
         requested_at=requested_utc,
         reason=payload.reason.strip(),
         status=MakeupRequestStatus.pending,
+        day_state_at_submission=assessment.state.value,
+        snapshot_token_at_submission=assessment.snapshot_token,
+        system_suggested_type=assessment.suggested_type,
+        exception_confirmed=requires_exception and payload.exception_confirmed,
     )
     db.add(req)
     try:
@@ -366,8 +538,8 @@ async def liff_makeup_pending(
     payload: TokenRequest,
     db: Session = Depends(get_db),
     _: None = Depends(_require_liff),
-):
-    """Manager: list all pending makeup punch requests."""
+) -> dict[str, object]:
+    """Manager: list pending requests with audit and current local-day status."""
     settings = get_settings()
     line_user_id = await _verify_line_token(payload.id_token, settings.liff_channel_id)
     _get_manager(db, line_user_id)  # raises 403 if not manager
@@ -383,17 +555,7 @@ async def liff_makeup_pending(
 
     return {
         "requests": [
-            {
-                "id": r.id,
-                "employee_name": (
-                    r.employee.display_name or r.employee.full_name or r.employee.email
-                ),
-                "type": r.type.value,
-                "type_label": "上班" if r.type == CheckInType.clock_in else "下班",
-                "requested_at": r.requested_at.astimezone(tz).strftime("%m/%d %H:%M"),
-                "reason": r.reason,
-            }
-            for r in requests
+            _serialize_pending_makeup_request(db, request, tz) for request in requests
         ]
     }
 
@@ -403,8 +565,8 @@ async def liff_makeup_review(
     payload: MakeupReviewPayload,
     db: Session = Depends(get_db),
     _: None = Depends(_require_liff),
-):
-    """Manager: approve or reject a pending makeup punch request."""
+) -> dict[str, object]:
+    """Manager: revalidate approvals or reject a pending makeup request."""
     settings = get_settings()
     line_user_id = await _verify_line_token(payload.id_token, settings.liff_channel_id)
     manager = _get_manager(db, line_user_id)
@@ -425,6 +587,39 @@ async def liff_makeup_review(
     )
     if not target:
         raise HTTPException(status_code=404, detail="Pending request not found.")
+
+    if payload.action == "approve":
+        if payload.observed_day_state is None or payload.observed_snapshot_token is None:
+            raise HTTPException(
+                status_code=409, detail="系統已更新，請關閉並重新開啟打卡頁面。",
+            )
+        tz = ZoneInfo(settings.timezone)
+        requested_at = target.requested_at
+        if requested_at.tzinfo is None:
+            requested_at = requested_at.replace(tzinfo=timezone.utc)
+        current = assess_makeup_day(
+            db, target.employee_id, requested_at.astimezone(tz).date(), tz,
+        )
+        if (
+            payload.observed_day_state != current.state
+            or payload.observed_snapshot_token != current.snapshot_token
+        ):
+            _raise_makeup_conflict(
+                "stale_day_state", "當日打卡紀錄已更新，請重新檢查後再核准。", current, tz,
+            )
+        needs_manager_confirmation = (
+            target.day_state_at_submission is None
+            or target.snapshot_token_at_submission is None
+            or target.exception_confirmed
+            or target.day_state_at_submission != current.state.value
+            or target.snapshot_token_at_submission != current.snapshot_token
+            or requires_exception_confirmation(current, target.type)
+        )
+        if needs_manager_confirmation and not payload.exception_confirmed:
+            _raise_makeup_conflict(
+                "exception_confirmation_required",
+                "此申請與目前打卡紀錄不一致，請確認後再核准。", current, tz,
+            )
 
     new_status = (
         MakeupRequestStatus.approved if payload.action == "approve"

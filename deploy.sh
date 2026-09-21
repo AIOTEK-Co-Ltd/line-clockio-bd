@@ -9,12 +9,33 @@ PROJECT_ID="aiotek-bot"
 REGION="asia-east1"
 SERVICE="line-clockio"
 IMAGE="gcr.io/${PROJECT_ID}/${SERVICE}"
+RUNTIME_SERVICE_ACCOUNT="600104370576-compute@developer.gserviceaccount.com"
+CLOUD_SQL_CONNECTION_NAME="${PROJECT_ID}:${REGION}:line-clockio-db-new"
 
 echo "==> Building Docker image (linux/amd64 for Cloud Run)..."
 docker build --platform linux/amd64 -t "${IMAGE}" .
 
 echo "==> Pushing to Google Container Registry..."
 docker push "${IMAGE}"
+
+echo "==> Running database migrations..."
+gcloud run jobs deploy line-clockio-migrate \
+  --image "${IMAGE}" \
+  --region "${REGION}" \
+  --project "${PROJECT_ID}" \
+  --service-account "${RUNTIME_SERVICE_ACCOUNT}" \
+  --set-cloudsql-instances "${CLOUD_SQL_CONNECTION_NAME}" \
+  --set-secrets DATABASE_URL=DATABASE_URL:latest \
+  --command alembic \
+  --args upgrade,head \
+  --tasks 1 \
+  --parallelism 1 \
+  --max-retries 0 \
+  --quiet
+gcloud run jobs execute line-clockio-migrate \
+  --region "${REGION}" \
+  --project "${PROJECT_ID}" \
+  --wait
 
 echo "==> Deploying to Cloud Run..."
 gcloud run deploy "${SERVICE}" \
@@ -28,7 +49,7 @@ gcloud run deploy "${SERVICE}" \
   --memory 512Mi \
   --cpu 1 \
   --timeout 60 \
-  --set-cloudsql-instances "${PROJECT_ID}:${REGION}:line-clockio-db-new" \
+  --set-cloudsql-instances "${CLOUD_SQL_CONNECTION_NAME}" \
   --set-env-vars "DEBUG=${DEBUG:-false}" \
   --set-secrets "\
 LINE_CHANNEL_ACCESS_TOKEN=LINE_CHANNEL_ACCESS_TOKEN:latest,\

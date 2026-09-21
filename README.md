@@ -38,6 +38,7 @@ Cloud Scheduler ───── /internal/* ───┘              ├── 
 
 - 系統時區預設為 `Asia/Taipei`，資料庫時間使用 timezone-aware datetime。
 - 同一員工同一天只能有一筆一般上班與一筆一般下班打卡；主管核准補打卡時可明確覆蓋這項限制。
+- 補打卡會依員工在所選本地日期的既有 `clock_in`／`clock_out` 建議缺少的類型；員工可以改選，但必須確認例外，主管核准時也會重新檢查並二次確認異常狀態。
 - 每日工時取「第一筆上班」到「最後一筆下班」，固定扣除 60 分鐘午休，再以 8 小時為正常工時。
 - 加班以 30 分鐘為單位向下計算；前 2 小時為第一級、後 2 小時為第二級；每日超過 4 小時、每月超過 46 小時會標示警告。
 - 工廠檔案格式為 `機台編號,員工卡號,YYYY/MM/DD,HH:MM:SS`，僅包含已設定 8 碼英數卡號的員工。
@@ -123,14 +124,17 @@ uv run --with-requirements requirements-dev.txt ruff check app/ tests/
 
 ## 部署
 
-Push 到 `main` 時，GitHub Actions 會先 lint、test，再透過 `gcloud run deploy --source .` 部署到：
+Push 到 `main` 時，GitHub Actions 會先 lint、test，再用同一份 checkout source 建立／更新 `line-clockio-migrate` Cloud Run Job。Job 以單一 task、parallelism 1、max retries 0 執行 `alembic upgrade head`，透過 `--wait` 等待成功後，才以 `gcloud run deploy --source .` 部署 service；migration 失敗會中止部署。Deploy job 設有 concurrency group 且 `cancel-in-progress: false`，避免 CI release 同時執行 migration。部署目標：
 
 - GCP project：`aiotek-bot`
 - Cloud Run service：`line-clockio`
 - Region：`asia-east1`
 - Cloud SQL connection：`aiotek-bot:asia-east1:line-clockio-db-new`
+- Migration runtime service account：`600104370576-compute@developer.gserviceaccount.com`
 
-CI 需要 GitHub secret `GCP_SA_KEY`。`deploy.sh` 提供另一條手動 Docker build/push/deploy 路徑，但目前部署相關腳本之間有設定漂移；重新建置環境前請先處理下方 P0 項目，不要直接照腳本建立資源。
+Migration job 只注入 `DATABASE_URL` Secret Manager secret，使用上述 runtime service account 與 Cloud SQL connection。2026-09-15 read-only preflight 確認 service 沒有 Direct VPC／VPC connector，Cloud SQL 啟用 public IP 且未設定 private network，因此 job 沿用 Cloud SQL attachment，不另加 VPC 設定。Application instance 啟動時只執行 Uvicorn，不再執行 Alembic。
+
+CI 需要 GitHub secret `GCP_SA_KEY`，部署身分須能建立、更新、執行 Cloud Run Job，並能 act as runtime service account。`deploy.sh` 的手動路徑會先 Docker build/push，再讓 migration job 與 service 使用同一個 `${IMAGE}`；同樣等待 migration 成功才部署 service。手動部署前需確認沒有 CI 或其他手動 release 正在進行。若 migration 失敗，先排除原因並重跑部署，不可跳過 gate；本次 `005` 是新增 audit 欄位，回退 application revision 時保留 schema，勿在新版本仍運行時 downgrade。部署相關腳本仍有下列設定漂移，重新建置環境前請先處理 P0 項目。
 
 排程端點為 `POST /internal/jobs/factory_export`，Cloud Scheduler 必須帶 `X-Internal-Secret: <INTERNAL_SECRET>`。端點固定匯出「Asia/Taipei 前一日」，目前不支援 query parameter 指定補匯日期。
 
