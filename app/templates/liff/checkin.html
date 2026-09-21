@@ -858,17 +858,27 @@
         exception_confirmed: document.getElementById("makeup-exception-confirmed").checked,
         reason,
       });
-      if (statusRequestId !== _makeupStatusRequestId ||
-          date !== document.getElementById("makeup-date").value) return;
+      // The user may have changed the date while the request was in flight.
+      // The request still succeeded, so always restore the UI and say so —
+      // silently returning left the loading overlay up and the button locked.
+      const stale = statusRequestId !== _makeupStatusRequestId ||
+                    date !== document.getElementById("makeup-date").value;
       setLoading(false);
       submitBtn.disabled = false;
       toast(`${SVG_OK} 申請已送出，等候管理員審核`);
+      if (stale) { loadMakeupDayStatus(); return; }
       showHome();
     } catch (e) {
-      if (statusRequestId !== _makeupStatusRequestId ||
-          date !== document.getElementById("makeup-date").value) return;
+      const stale = statusRequestId !== _makeupStatusRequestId ||
+                    date !== document.getElementById("makeup-date").value;
       setLoading(false);
       submitBtn.disabled = false;
+      if (stale) {
+        // Conflict details describe the old date — refresh instead of applying them
+        toast(`${SVG_ERR} 送出失敗，請重新確認後再試`, 3500);
+        loadMakeupDayStatus();
+        return;
+      }
       if (e.status === 409 && applyMakeupConflict(e.detail)) return;
       toast(`${SVG_ERR} ${esc(e.detail||"送出失敗，請重試")}`, 3500);
     }
