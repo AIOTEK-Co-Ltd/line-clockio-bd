@@ -493,7 +493,9 @@ async def liff_makeup_request(
             assessment,
             tz,
         )
-    requires_exception = requires_exception_confirmation(assessment, makeup_type)
+    requires_exception = requires_exception_confirmation(
+        assessment, makeup_type, requested_utc
+    )
     if requires_exception and not payload.exception_confirmed:
         _raise_makeup_conflict(
             "exception_confirmation_required",
@@ -613,7 +615,7 @@ async def liff_makeup_review(
             or target.exception_confirmed
             or target.day_state_at_submission != current.state.value
             or target.snapshot_token_at_submission != current.snapshot_token
-            or requires_exception_confirmation(current, target.type)
+            or requires_exception_confirmation(current, target.type, requested_at)
         )
         if needs_manager_confirmation and not payload.exception_confirmed:
             _raise_makeup_conflict(
