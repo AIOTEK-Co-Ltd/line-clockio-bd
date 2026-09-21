@@ -11,10 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.database import get_db
-from app.models.check_in import CheckIn
-from app.models.employee import Employee
-from app.services.checkin_query import build_checkin_query
-from app.services.ftp_export import build_factory_lines, upload_factory_file
+from app.services.ftp_export import build_factory_day_file, upload_factory_file
 
 router = APIRouter(prefix="/internal", tags=["internal"])
 logger = logging.getLogger(__name__)
@@ -49,21 +46,13 @@ async def job_factory_export(
     yesterday = (now_local - timedelta(days=1)).date()
     date_str = yesterday.strftime("%Y-%m-%d")
 
-    check_ins = (
-        build_checkin_query(db, tz, employee_id=None, date_from=date_str, date_to=date_str)
-        .filter(Employee.card_number.isnot(None))
-        .order_by(CheckIn.checked_at.asc())
-        .all()
+    # Empty files are intentional — factory FTP system expects one file per day
+    # regardless of whether anyone punched in. Do not add a skip guard.
+    filename, content, record_count = build_factory_day_file(
+        db, yesterday, tz, settings.factory_machine_id
     )
 
-    lines = build_factory_lines(check_ins, settings.factory_machine_id, tz)
-
-    # Empty files are intentional — factory FTP system expects one file per day
-    # regardless of whether anyone punched in. Do not add a len(lines)==0 skip guard.
-    content = ("\n".join(lines) + ("\n" if lines else "")).encode("utf-8")
-    filename = f"factory_{yesterday.strftime('%Y%m%d')}.txt"
-
-    logger.info("Factory export job: %d records for %s", len(lines), date_str)
+    logger.info("Factory export job: %d records for %s", record_count, date_str)
 
     try:
         upload_factory_file(
@@ -78,4 +67,4 @@ async def job_factory_export(
         logger.exception("Factory FTP upload failed for %s", date_str)
         raise HTTPException(status_code=502, detail="FTP upload failed.")
 
-    return {"status": "ok", "filename": filename, "records": len(lines)}
+    return {"status": "ok", "filename": filename, "records": record_count}
