@@ -2,8 +2,10 @@
 
 import hashlib
 import hmac
+import json
+import re
 from base64 import b64encode
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -32,13 +34,18 @@ def _make_sig(body: bytes, secret: str) -> str:
 
 
 def _add_otp(
-    db, line_user_id: str, email: str, code: str = "123456", failed_attempts: int = 0
+    db,
+    line_user_id: str,
+    email: str,
+    code: str = "123456",
+    failed_attempts: int = 0,
+    expires_at: datetime | None = None,
 ) -> EmailVerification:
     ev = EmailVerification(
         line_user_id=line_user_id,
         email=email,
         otp_code=_hash_otp(code, line_user_id),  # store hash, matching production behaviour
-        expires_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        expires_at=expires_at or datetime(2030, 1, 1, tzinfo=timezone.utc),
         used=False,
         failed_attempts=failed_attempts,
     )
@@ -435,3 +442,96 @@ async def test_skip_unbound_user_gets_bind_prompt(db):
         await _handle_skip(db, "Ughost", TOKEN)
 
     assert "帳號綁定" in mock_reply.call_args[0][1]
+
+
+# ── OTP expiry and plaintext exposure ─────────────────────────────────────────
+
+async def test_otp_expired_is_rejected_even_with_correct_code(db):
+    """The 10-minute window is enforced: an expired OTP cannot bind an account."""
+    db.add(Employee(email=EMAIL, is_active=True))
+    db.commit()
+    _add_otp(
+        db, LINE_UID, EMAIL,
+        expires_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+    )
+
+    with patch("app.routers.webhook._reply_text", new_callable=AsyncMock) as mock_reply, \
+         patch("app.routers.webhook._get_line_display_name", new_callable=AsyncMock, return_value=None):
+        await _handle_otp_verification(db, LINE_UID, "123456", TOKEN)  # correct code
+
+    assert "驗證碼無效" in mock_reply.call_args[0][1]
+    employee = db.query(Employee).filter(Employee.email == EMAIL).one()
+    assert employee.line_user_id is None
+
+
+@pytest.mark.parametrize("debug,mailgun_enabled,expect_plaintext", [
+    (True, True, False),    # Mailgun configured → send by email, never in reply
+    (False, False, False),  # production without Mailgun → refuse, never in reply
+    (True, False, True),    # the only combination allowed to reveal the OTP
+])
+async def test_otp_plaintext_only_in_debug_without_mailgun(
+    db, debug, mailgun_enabled, expect_plaintext,
+):
+    """AGENTS.md: plaintext OTP may only appear when DEBUG and Mailgun is unset."""
+    settings = MagicMock()
+    settings.debug = debug
+    settings.mailgun_enabled = mailgun_enabled
+
+    with patch("app.routers.webhook._reply_text", new_callable=AsyncMock) as mock_reply, \
+         patch("app.routers.webhook.get_settings", return_value=settings), \
+         patch("app.routers.webhook.send_otp_email", new_callable=AsyncMock, return_value=True):
+        await _handle_email_submission(db, LINE_UID, EMAIL, TOKEN)
+
+    message = mock_reply.call_args[0][1]
+    assert (re.search(r"\d{6}", message) is not None) is expect_plaintext
+
+
+# ── Webhook endpoint: signature and text dispatch ─────────────────────────────
+
+def _webhook_post(client, body: bytes, signature: str | None, secret: str = "channel-secret"):
+    settings = MagicMock()
+    settings.line_channel_secret = secret
+    headers = {"Content-Type": "application/json"}
+    if signature is not None:
+        headers["X-Line-Signature"] = signature
+    with patch("app.routers.webhook.get_settings", return_value=settings):
+        return client.post("/webhook", content=body, headers=headers)
+
+
+def test_webhook_rejects_invalid_signature(client):
+    body = b'{"events":[]}'
+    assert _webhook_post(client, body, "not-a-valid-signature").status_code == 400
+
+
+def test_webhook_requires_signature_header(client):
+    assert _webhook_post(client, b'{"events":[]}', None).status_code == 422
+
+
+def test_webhook_lowercases_submitted_email(client):
+    """Alice@AIOTEK.com.tw must bind the same as the lowercase address."""
+    body = json.dumps({"events": [{
+        "type": "message", "message": {"type": "text", "text": "Alice@AIOTEK.com.tw"},
+        "source": {"userId": LINE_UID}, "replyToken": TOKEN,
+    }]}).encode()
+
+    with patch("app.routers.webhook._handle_email_submission", new_callable=AsyncMock) as handler:
+        response = _webhook_post(client, body, _make_sig(body, "channel-secret"))
+
+    assert response.status_code == 200
+    handler.assert_awaited_once()
+    assert handler.await_args[0][2] == EMAIL
+
+
+@pytest.mark.parametrize("text", ["12345", "1234567", "12a456"])
+def test_webhook_ignores_non_six_digit_codes(client, text):
+    """_OTP_RE must not treat other numeric-ish text as a verification code."""
+    body = json.dumps({"events": [{
+        "type": "message", "message": {"type": "text", "text": text},
+        "source": {"userId": LINE_UID}, "replyToken": TOKEN,
+    }]}).encode()
+
+    with patch("app.routers.webhook._handle_otp_verification", new_callable=AsyncMock) as handler:
+        response = _webhook_post(client, body, _make_sig(body, "channel-secret"))
+
+    assert response.status_code == 200
+    handler.assert_not_awaited()

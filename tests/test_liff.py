@@ -218,7 +218,7 @@ def _mock_settings_liff(tz: str = "Asia/Taipei") -> MagicMock:
 
 def test_status_returns_display_name(client, db):
     """Status returns display_name when employee is bound."""
-    emp = _add_employee(db, display_name="Alice")
+    _add_employee(db, display_name="Alice")
     settings = _mock_settings_liff()
 
     with patch("app.routers.liff.get_settings", return_value=settings), \
@@ -1395,3 +1395,28 @@ def test_makeup_review_requires_confirmation_for_out_of_order_request(client, db
     assert response.status_code == 409
     assert response.json()["detail"]["code"] == "exception_confirmation_required"
     assert db.query(CheckIn).filter_by(ip_address="makeup:approved").count() == 0
+
+
+@pytest.mark.parametrize("punch_type,label", [("clock_in", "上班"), ("clock_out", "下班")])
+def test_checkin_rejects_same_type_twice_on_one_day(client, db, punch_type, label):
+    """AGENTS.md: the same punch type must not be recorded twice on one day."""
+    emp = _add_employee(db)
+    now = datetime.now(timezone.utc)
+    _add_checkin(db, emp.id, CheckInType.clock_in, now)
+    if punch_type == "clock_out":
+        _add_checkin(db, emp.id, CheckInType.clock_out, now)
+    before = db.query(CheckIn).count()
+
+    settings = _mock_settings_liff()
+    with patch("app.routers.liff.get_settings", return_value=settings), \
+         patch("app.routers.liff._verify_line_token", new_callable=AsyncMock, return_value=LINE_UID):
+        resp = client.post("/liff/checkin", json={
+            "type": punch_type,
+            "latitude": 25.0,
+            "longitude": 121.0,
+            "id_token": "tok",
+        })
+
+    assert resp.status_code == 409
+    assert f"今日已完成{label}打卡" in resp.json()["detail"]
+    assert db.query(CheckIn).count() == before

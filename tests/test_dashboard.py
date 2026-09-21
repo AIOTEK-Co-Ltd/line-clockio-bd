@@ -1,11 +1,13 @@
 """Tests for app/routers/dashboard.py — pure-function and endpoint coverage."""
 
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from app.models.check_in import CheckIn, CheckInType
 from app.models.employee import Employee
-from app.routers.dashboard import _csv_safe
+from app.routers.dashboard import _csrf_ok, _csv_safe, _get_csrf_token
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -274,3 +276,83 @@ def test_hr_import_duplicate_card_in_batch_triggers_rollback(client, db):
     location = resp.headers["location"]
     assert "created=0" in location
     assert "errors=1" in location
+
+
+# ── CSRF protection (no _csrf_ok patching) ────────────────────────────────────
+
+def test_csrf_token_is_created_once_per_session():
+    """_get_csrf_token lazily creates a token and reuses it for the session."""
+    from types import SimpleNamespace
+
+    request = SimpleNamespace(session={})
+    first = _get_csrf_token(request)
+    assert len(first) == 64
+    assert _get_csrf_token(request) == first
+
+
+@pytest.mark.parametrize("submitted,session_token,expected", [
+    ("tok", "tok", True),
+    ("tok", "other", False),
+    ("tok", "", False),
+    ("", "", False),
+])
+def test_csrf_ok_compares_against_session(submitted, session_token, expected):
+    from types import SimpleNamespace
+
+    request = SimpleNamespace(session={"csrf_token": session_token} if session_token else {})
+    assert _csrf_ok(request, submitted) is expected
+
+
+def test_hr_import_rejects_wrong_csrf_token(client, db):
+    """A write POST with a bad CSRF token must not reach the import logic."""
+    csv_bytes = _hr_import_csv([
+        {"員工編號": "E900", "姓名": "Mallory",
+         "Email": "mallory@aiotek.com.tw", "員工卡號": "AB123456"},
+    ])
+
+    with patch("app.routers.dashboard._is_manager", return_value=True), \
+         patch("app.routers.dashboard.send_invitation_email"):
+        resp = client.post(
+            "/dashboard/import",
+            files={"file": ("employees.csv", csv_bytes, "text/csv")},
+            data={"csrf_token": "wrong-token"},
+            follow_redirects=False,
+        )
+
+    assert resp.status_code == 303
+    assert "error=csrf" in resp.headers["location"]
+    assert db.query(Employee).filter(Employee.email == "mallory@aiotek.com.tw").count() == 0
+
+
+def test_hr_import_requires_csrf_field(client):
+    """Omitting the CSRF field is a validation error, not a silent success."""
+    csv_bytes = _hr_import_csv([])
+
+    with patch("app.routers.dashboard._is_manager", return_value=True):
+        resp = client.post(
+            "/dashboard/import",
+            files={"file": ("employees.csv", csv_bytes, "text/csv")},
+            follow_redirects=False,
+        )
+
+    assert resp.status_code == 422
+
+
+def test_invite_rejects_wrong_csrf_token(client, db):
+    """The invite endpoint must not send mail when the CSRF token is wrong."""
+    employee = Employee(email="invitee@aiotek.com.tw", is_active=True)
+    db.add(employee)
+    db.commit()
+    db.refresh(employee)
+
+    with patch("app.routers.dashboard._is_manager", return_value=True), \
+         patch("app.routers.dashboard.send_invitation_email", new_callable=AsyncMock) as mock_send:
+        resp = client.post(
+            f"/dashboard/employees/{employee.id}/invite",
+            data={"csrf_token": "wrong-token"},
+            follow_redirects=False,
+        )
+
+    assert resp.status_code == 303
+    assert "error=csrf" in resp.headers["location"]
+    mock_send.assert_not_awaited()
