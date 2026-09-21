@@ -11,8 +11,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
-from app.services.checkin_query import build_checkin_query
-from app.services.ftp_export import build_factory_lines, upload_factory_file
+from app.services.ftp_export import build_factory_day_file, upload_factory_file
+from app.services.time_utils import as_utc
 from app.services.makeup_validation import (
     MakeupDayAssessment,
     MakeupDayState,
@@ -361,10 +361,7 @@ def _serialize_makeup_day(
     """Serialize the assessment with punch times in the configured timezone."""
     records = []
     for record in assessment.records:
-        checked_at = record.checked_at
-        # SQLite returns naive UTC values for timezone-aware columns.
-        if checked_at.tzinfo is None:
-            checked_at = checked_at.replace(tzinfo=timezone.utc)
+        checked_at = as_utc(record.checked_at)
         records.append({
             "type": record.type.value,
             "type_label": "上班" if record.type == CheckInType.clock_in else "下班",
@@ -398,10 +395,7 @@ def _serialize_pending_makeup_request(
     tz: ZoneInfo,
 ) -> dict[str, object]:
     """Include submission audit and the employee's current local-day assessment."""
-    requested_at = request.requested_at
-    # SQLite returns naive UTC values for timezone-aware columns.
-    if requested_at.tzinfo is None:
-        requested_at = requested_at.replace(tzinfo=timezone.utc)
+    requested_at = as_utc(request.requested_at)
     assessment = assess_makeup_day(
         db, request.employee_id, requested_at.astimezone(tz).date(), tz,
     )
@@ -596,9 +590,7 @@ async def liff_makeup_review(
                 status_code=409, detail="系統已更新，請關閉並重新開啟打卡頁面。",
             )
         tz = ZoneInfo(settings.timezone)
-        requested_at = target.requested_at
-        if requested_at.tzinfo is None:
-            requested_at = requested_at.replace(tzinfo=timezone.utc)
+        requested_at = as_utc(target.requested_at)
         current = assess_makeup_day(
             db, target.employee_id, requested_at.astimezone(tz).date(), tz,
         )
@@ -687,17 +679,10 @@ def _try_supplemental_ftp_export(db: Session, punch_dt: datetime) -> None:
         return
     try:
         tz = ZoneInfo(settings.timezone)
-        local_date = punch_dt.astimezone(tz).date()
-        date_str = local_date.strftime("%Y-%m-%d")
-        check_ins = (
-            build_checkin_query(db, tz, employee_id=None, date_from=date_str, date_to=date_str)
-            .filter(Employee.card_number.isnot(None))
-            .order_by(CheckIn.checked_at.asc())
-            .all()
+        local_date = as_utc(punch_dt).astimezone(tz).date()
+        filename, content, record_count = build_factory_day_file(
+            db, local_date, tz, settings.factory_machine_id
         )
-        lines = build_factory_lines(check_ins, settings.factory_machine_id, tz)
-        content = ("\n".join(lines) + ("\n" if lines else "")).encode("utf-8")
-        filename = f"factory_{local_date.strftime('%Y%m%d')}.txt"
         upload_factory_file(
             host=settings.ftp_host,
             user=settings.ftp_user,
@@ -706,7 +691,7 @@ def _try_supplemental_ftp_export(db: Session, punch_dt: datetime) -> None:
             filename=filename,
             content=content,
         )
-        logger.info("Supplemental FTP export: %s (%d records)", filename, len(lines))
+        logger.info("Supplemental FTP export: %s (%d records)", filename, record_count)
     except Exception:
         logger.exception("Supplemental FTP export failed for %s — approval was not rolled back", punch_dt)
 
